@@ -51,7 +51,10 @@ export async function POST(
 
     if (action === 'approve') {
       const { error } = await db.from('campaigns').update({
-        status: 'personas',
+        // Pictures next, then the twenty. Nothing was illustrated before this
+        // point on purpose: the slots on the page above are what was approved,
+        // and paying to fill them on a page that gets sent back is waste.
+        status: 'images',
         error_message: null,
         // Approving clears the last rejection: it was answered, and leaving it
         // would steer a rewrite that happens three campaigns from now.
@@ -60,8 +63,8 @@ export async function POST(
       if (error) return Response.json({ error: error.message }, { status: 500 });
 
       return Response.json({
-        status: 'personas',
-        did: 'Main page approved. Writing the twenty landing pages from it.',
+        status: 'images',
+        did: 'Main page approved. Choosing photos for it, then writing the twenty pages.',
       });
     }
 

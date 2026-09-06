@@ -18,10 +18,18 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-/** The un-personalised base page. Useful as a control against the 20 variants. */
+/**
+ * The un-personalised base page. Useful as a control against the 20 variants,
+ * and it is what the approval screen links to.
+ *
+ * `preview` is on here and nowhere else: this page is the operator's proof
+ * sheet, so an unfilled picture slot should be drawn as a labelled box saying
+ * what belongs in it. The twenty live persona URLs are ad destinations and
+ * render an unfilled slot as nothing at all.
+ */
 export default async function BasePage({ params }: Props) {
   const { campaignSlug } = await params;
   const page = await getPublicPage(campaignSlug);
   if (!page) notFound();
-  return <Listicle page={page} />;
+  return <Listicle page={page} preview />;
 }

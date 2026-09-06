@@ -2,8 +2,12 @@ import { serviceClient } from '@/lib/supabase';
 import { ingestProductFromServer } from '@/lib/ingest/cloud';
 import { buildProductBrief, buildProductBriefFromText } from './brief';
 import { buildBasePage } from './base-page';
+import {
+  applyImages, libraryForPrompt, planImages, resolveImages,
+} from './images';
 import { generatePersonaBatch, type ExistingPersona } from './personas';
 import type { BasePage, ProductBrief } from './schemas';
+import type { Reason } from '@/lib/page-data';
 
 /**
  * The pipeline driver. One call does ONE unit of work and returns.
@@ -270,6 +274,91 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       };
     }
 
+    // ── pictures, once the words are approved ───────────────────────────
+    // Deliberately after the gate. The base page is reviewed as slots — every
+    // reason shows where its picture goes and what the copy expects to see in
+    // it — so nothing is illustrated until the words it illustrates are agreed.
+    case 'images': {
+      const brief = campaign.scraped_data?.brief;
+      if (!brief) return fail(campaign.id, 'Reached the image stage with no product brief.');
+
+      const { data: basePage } = await db.from('base_pages')
+        .select('id, reasons, hero_image_url').eq('campaign_id', campaign.id).maybeSingle();
+      if (!basePage) {
+        await db.from('campaigns').update({ status: 'base_review' }).eq('id', campaign.id);
+        return {
+          status: 'base_review', done: false, waiting: false, terminal: false,
+          did: 'The approved main page is missing. Writing it again.',
+        };
+      }
+
+      const urls = brief.image_urls ?? [];
+      if (!urls.length) {
+        await db.from('campaigns').update({ status: 'personas' }).eq('id', campaign.id);
+        return {
+          status: 'personas', done: false, waiting: false, terminal: false,
+          did: 'No photographs were found on the source page, so the pages ship without them.',
+          notes: ['Nothing here generates a picture. If the pages should have images, '
+            + 'point the campaign at a page that has product photos on it.'],
+        };
+      }
+
+      // Idempotent: a library that already exists means this unit ran. Re-running
+      // it would pay for a second look at the same photographs and could move a
+      // picture the operator has already seen.
+      const { count } = await db.from('campaign_images')
+        .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+      if (count && count > 0) {
+        await db.from('campaigns').update({ status: 'personas' }).eq('id', campaign.id);
+        return {
+          status: 'personas', done: false, waiting: false, terminal: false,
+          did: 'Pictures were already chosen for this campaign. Moving on to the pages.',
+        };
+      }
+
+      const reasons = basePage.reasons as Reason[];
+      let resolved;
+      try {
+        const { plan } = await planImages(brief, reasons, urls);
+        resolved = resolveImages(plan, urls);
+      } catch (e) {
+        return fail(campaign.id, `Could not choose the pictures: ${(e as Error).message}`);
+      }
+
+      const { error: libError } = await db.from('campaign_images').insert(
+        resolved.library.map((i) => ({ ...i, campaign_id: campaign.id })),
+      );
+      if (libError) return fail(campaign.id, `Could not save the image library: ${libError.message}`);
+
+      const { error: pageError } = await db.from('base_pages').update({
+        reasons: applyImages(reasons, resolved.bySlot),
+        hero_image_url: resolved.hero?.url ?? null,
+        hero_image_alt: resolved.hero?.alt ?? null,
+      }).eq('id', basePage.id);
+      if (pageError) return fail(campaign.id, `Could not save the pictures: ${pageError.message}`);
+
+      await db.from('campaigns').update({ status: 'personas', error_message: null })
+        .eq('id', campaign.id);
+
+      const filled = resolved.bySlot.size + (resolved.hero ? 1 : 0);
+      const usable = resolved.library.filter((i) => i.usable).length;
+      const notes = [...resolved.notes];
+      // An empty slot is a decision, not a miss, and saying so is what stops it
+      // being read as a bug the way the first run's blank pages were.
+      const empty = reasons.length - resolved.bySlot.size;
+      if (empty > 0) {
+        notes.push(`${empty} of ${reasons.length} reasons have no picture: none of your photos `
+          + 'genuinely show what they claim. They render as text on the live pages rather than '
+          + 'as an unrelated photo.');
+      }
+
+      return {
+        status: 'personas', done: false, waiting: false, terminal: false, notes,
+        did: `Looked at ${resolved.library.length} photos from your site, `
+          + `${usable} usable as editorial, and placed ${filled} on the main page.`,
+      };
+    }
+
     // ── personas, five at a time ────────────────────────────────────────
     case 'personas': {
       const brief = campaign.scraped_data?.brief;
@@ -312,6 +401,29 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           .eq('campaign_id', campaign.id).order('persona_index');
         const existing: ExistingPersona[] = existingRows ?? [];
 
+        // The persona call is text-only and batched, so it can never see a
+        // photograph. Captions written by the image stage are the whole of what
+        // it has to choose from, which is why they are written for that purpose
+        // rather than as alt text.
+        const { data: libraryRows } = await db.from('campaign_images')
+          .select('position, source_url, caption, usable')
+          .eq('campaign_id', campaign.id).order('position');
+
+        // A persona page is its own three reasons followed by the base page's
+        // reasons 4-10, so anything already showing in that locked tail — or in
+        // the base hero, when the persona inherits it — would appear twice on
+        // the finished page. Withhold those rather than ask the model not to
+        // pick them. Reasons 1-3 are replaced wholesale, so whatever illustrated
+        // them on the base page is free again.
+        const spokenFor = new Set<string>([
+          ...(basePage.hero_image_url ? [basePage.hero_image_url as string] : []),
+          ...((basePage.reasons as Reason[]) ?? [])
+            .filter((r) => r.number > 3 && r.image_url)
+            .map((r) => r.image_url as string),
+        ]);
+        const library = (libraryRows ?? [])
+          .filter((l) => !spokenFor.has(l.source_url));
+
         if (existing.length >= PERSONA_TARGET) {
           await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
           return {
@@ -341,7 +453,9 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
               offer_body: basePage.offer_body ?? '',
               cta_button_text: basePage.cta_button_text,
             };
-            batch = await generatePersonaBatch(brief, forPrompt, existing, want);
+            batch = await generatePersonaBatch(
+              brief, forPrompt, existing, want, libraryForPrompt(library),
+            );
           } catch (e) {
             return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
           }
@@ -351,21 +465,51 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           if (!batch.personas.length) continue;
 
           const nextIndex = (existingRows?.at(-1)?.persona_index ?? 0) + 1;
-          const rows = batch.personas.slice(0, want).map((p, i) => ({
-            campaign_id: campaign.id,
-            persona_index: nextIndex + i,
-            slug: p.slug,
-            persona_name: p.persona_name,
-            primary_pain_point: p.primary_pain_point,
-            core_desire: p.core_desire,
-            angle_hook: p.angle_hook,
-            custom_topbar_notice: p.custom_topbar_notice || null,
-            custom_hero_headline: p.custom_hero_headline,
-            custom_reasons: p.custom_reasons,
-            // An empty quote means no real review fitted. Store null, not an empty
-            // testimonial — the page renders nothing rather than an empty card.
-            proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
-          }));
+          const rows = batch.personas.slice(0, want).map((p, i) => {
+            // A picked index is only ever a number in the model's answer. Turn
+            // it into a URL here, against the row we actually stored, and refuse
+            // an index that is out of range, was marked unusable, or is already
+            // on this buyer's page. The used-set is per persona: two personas
+            // sharing a photo is fine and expected, the same photo twice on one
+            // page is the thing that reads as broken.
+            const used = new Set<number>();
+            const pick = (index: number) => {
+              if (index < 0 || used.has(index)) return null;
+              const image = library.find((l) => l.position === index);
+              if (!image?.usable) return null;
+              used.add(index);
+              return image;
+            };
+            const hero = pick(p.hero_image_index);
+            return {
+              campaign_id: campaign.id,
+              persona_index: nextIndex + i,
+              slug: p.slug,
+              persona_name: p.persona_name,
+              primary_pain_point: p.primary_pain_point,
+              core_desire: p.core_desire,
+              angle_hook: p.angle_hook,
+              custom_topbar_notice: p.custom_topbar_notice || null,
+              custom_hero_headline: p.custom_hero_headline,
+              // Null inherits the main page's hero, which is the common case.
+              custom_hero_image_url: hero?.source_url ?? null,
+              custom_hero_image_alt: hero?.caption ?? null,
+              custom_reasons: p.custom_reasons.map((r) => {
+                const image = pick(r.image_index);
+                return {
+                  number: r.number,
+                  title: r.title,
+                  body: r.body,
+                  image_prompt: r.image_prompt,
+                  image_url: image?.source_url ?? null,
+                  image_alt: image?.caption ?? null,
+                };
+              }),
+              // An empty quote means no real review fitted. Store null, not an empty
+              // testimonial — the page renders nothing rather than an empty card.
+              proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
+            };
+          });
           const { error } = await db.from('personas').insert(rows);
           if (error) return fail(campaign.id, `Could not save personas: ${error.message}`);
           added = rows.length;

@@ -18,7 +18,7 @@ export async function GET(
     const campaign = await requireCampaignOwner(owner, id);
     const db = serviceClient();
 
-    const [{ data: personas }, { data: base }, { data: jobs }] = await Promise.all([
+    const [{ data: personas }, { data: base }, { data: jobs }, { data: images }] = await Promise.all([
       db.from('personas')
         .select('persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count')
         .eq('campaign_id', id).order('persona_index'),
@@ -26,12 +26,15 @@ export async function GET(
       // reading what will be copied onto twenty pages, and it has to be readable
       // without leaving the dashboard.
       db.from('base_pages')
-        .select('hero_headline, hero_subheadline, reasons, testimonials, '
-          + 'offer_headline, offer_body, cta_button_text, cta_url')
+        .select('hero_headline, hero_subheadline, hero_image_url, hero_image_alt, reasons, '
+          + 'testimonials, offer_headline, offer_body, cta_button_text, cta_url')
         .eq('campaign_id', id).maybeSingle(),
       db.from('scanner_jobs')
         .select('kind, status, attempts, notes, error_message, created_at, completed_at')
         .eq('campaign_id', id).order('created_at', { ascending: false }),
+      db.from('campaign_images')
+        .select('position, source_url, caption, kind, usable')
+        .eq('campaign_id', id).order('position'),
     ]);
 
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? '';
@@ -49,6 +52,10 @@ export async function GET(
       },
       brief: campaign.scraped_data?.brief ?? null,
       base_page: base ?? null,
+      // Empty until the picture stage runs, which is after approval. The review
+      // screen falls back to the brief's raw `image_urls` so it can still show
+      // WHAT was found before anything has been chosen.
+      images: images ?? [],
       personas: (personas ?? []).map((p) => ({
         ...p,
         url: `${site}/p/${campaign.slug}/${p.slug}`,

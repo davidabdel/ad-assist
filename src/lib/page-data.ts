@@ -4,8 +4,15 @@ export type Reason = {
   number: number;
   title: string;
   body: string;
+  /**
+   * What the copywriter said a picture here should show. Written at base-page
+   * time, before anything has looked at the photos, and it is what the review
+   * screen and the preview render in the empty slot.
+   */
   image_prompt?: string | null;
+  /** Filled by the image stage, after approval. Null means the slot stays empty. */
   image_url?: string | null;
+  image_alt?: string | null;
 };
 
 export type Testimonial = {
@@ -22,6 +29,8 @@ export type PublicPage = {
   topbar: string | null;
   headline: string;
   subheadline: string | null;
+  hero_image_url: string | null;
+  hero_image_alt: string | null;
   reasons: Reason[];
   testimonials: Testimonial[];
   offer_headline: string;

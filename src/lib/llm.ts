@@ -86,6 +86,13 @@ export type GenerateOptions<S extends z.ZodType> = {
   cachedContext?: string;
   /** The part that changes per call. */
   prompt: string;
+  /**
+   * Pictures to put in front of the model, in order. Sent at `detail: 'low'`,
+   * which is a fixed ~85 tokens each rather than a tiling cost that scales with
+   * resolution: every use here is "say what this photograph shows and whether it
+   * illustrates a claim", and that judgement does not need the full-size tiles.
+   */
+  images?: string[];
   schema: S;
   maxTokens?: number;
   effort?: Effort;
@@ -107,10 +114,21 @@ export async function generate<S extends z.ZodType>(
     ? `${opts.system}\n\n${opts.cachedContext}`
     : opts.system;
 
+  // Text first, pictures after, in the order the caller listed them. Prompts
+  // that refer to "IMAGE 0, IMAGE 1, …" depend on that ordering being the same
+  // ordering the model receives, so it is fixed here rather than left to a
+  // caller to get right.
+  const content: OpenAI.Responses.ResponseInputContent[] = [
+    { type: 'input_text', text: opts.prompt },
+    ...(opts.images ?? []).map((url) => ({
+      type: 'input_image' as const, image_url: url, detail: 'low' as const,
+    })),
+  ];
+
   const response = await client().responses.parse({
     model: MODEL,
     instructions,
-    input: [{ role: 'user', content: opts.prompt }],
+    input: [{ role: 'user', content }],
     reasoning: { effort: EFFORT[opts.effort ?? 'high'] },
     max_output_tokens: maxContent + REASONING_HEADROOM,
     text: { format: zodTextFormat(opts.schema, 'result') },

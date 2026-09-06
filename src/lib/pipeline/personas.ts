@@ -44,7 +44,21 @@ RULES
   fabricated testimonial is not acceptable under any circumstances.
 - custom_topbar_notice may be an empty string, which means "use the campaign's
   own offer bar".
-- Exactly 3 custom_reasons per persona, numbered 1, 2 and 3.`;
+- Exactly 3 custom_reasons per persona, numbered 1, 2 and 3.
+
+PICTURES
+An IMAGE LIBRARY may be given below: real photographs from the seller's own
+site, each with an index and a description of what is in it. You cannot see
+them, so the description is all you have.
+- Choose by index. Never write a URL.
+- A photo may be used ONCE per persona. Two personas may use the same photo.
+- Only choose a photo whose description genuinely shows what the reason claims.
+  Use -1 when nothing fits. -1 is a correct answer and you should expect to use
+  it often — an unrelated photo is worse than none.
+- hero_image_index is -1 unless a specific photo speaks to THIS buyer more than
+  the main page's does.
+- Photos already used elsewhere on the page are not in the library. If the
+  library is empty, every index is -1.`;
 
 export type ExistingPersona = { persona_name: string; primary_pain_point: string; slug: string };
 
@@ -79,13 +93,21 @@ export async function generatePersonaBatch(
   base: BasePage,
   existing: ExistingPersona[],
   want: number,
+  /** `index: what the photo shows`, one per line. Empty when there is nothing to pick from. */
+  imageLibrary = '',
 ): Promise<PersonaBatchResult> {
   const { data, usage } = await generate({
     system: SYSTEM,
     cachedContext:
       `PRODUCT BRIEF\n---\n${JSON.stringify(brief, null, 2)}\n---\n\n`
       + `BASE PAGE (reasons 1-3 are what you are replacing; 4-10 are locked and `
-      + `will appear below yours)\n---\n${JSON.stringify(base, null, 2)}\n---`,
+      + `will appear below yours)\n---\n${JSON.stringify(base, null, 2)}\n---\n\n`
+      // Part of the cached prefix rather than the per-batch prompt: it is
+      // identical across all four batches of a campaign, and the whole caching
+      // strategy here is keeping what does not change at the front.
+      + (imageLibrary
+        ? `IMAGE LIBRARY (choose by index, -1 for none)\n---\n${imageLibrary}\n---`
+        : 'IMAGE LIBRARY\n---\n(empty — use -1 for every image index)\n---'),
     prompt: batchPrompt(want, existing),
     schema: PersonaBatchSchema,
     maxTokens: 16000,

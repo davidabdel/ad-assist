@@ -22,13 +22,18 @@ const SAMPLE: PublicPage = {
     '11 Reasons Commuters Are Replacing Their Runners With Something They Can Wear Into the Office',
   subheadline:
     'Placeholder copy standing in for the persona stage. Product details and the quotes below are real, pulled from the live store by the ingest worker.',
+  // Null on purpose: this preview renders in `preview` mode, so the empty
+  // picture slots draw as labelled boxes. That is exactly what the operator
+  // sees on the real base page while approving the words.
+  hero_image_url: null,
+  hero_image_alt: null,
   reasons: [
-    { number: 1, title: 'They do not read as gym shoes', body: 'PLACEHOLDER — this is where the persona-specific reason lands. Reasons 1 to 3 are the part that swaps per persona; the remaining seven stay locked across all 20 pages.' },
-    { number: 2, title: 'No socks, no smell, no second pair in a bag', body: 'PLACEHOLDER — persona-specific reason two.' },
-    { number: 3, title: 'Machine washable, so a wet platform is not a disaster', body: 'PLACEHOLDER — persona-specific reason three.' },
-    { number: 4, title: 'Merino wool regulates temperature', body: 'LOCKED — shared across all 20 persona pages. Written once from the product brief.' },
-    { number: 5, title: 'Made from FSC-certified eucalyptus fibre', body: 'LOCKED — shared reason.' },
-    { number: 6, title: 'Carbon footprint printed on every pair', body: 'LOCKED — shared reason.' },
+    { number: 1, title: 'They do not read as gym shoes', body: 'PLACEHOLDER — this is where the persona-specific reason lands. Reasons 1 to 3 are the part that swaps per persona; the remaining seven stay locked across all 20 pages.', image_prompt: 'The shoe worn with chinos in an office, not with activewear.' },
+    { number: 2, title: 'No socks, no smell, no second pair in a bag', body: 'PLACEHOLDER — persona-specific reason two.', image_prompt: 'The shoe alone on a desk beside a laptop bag.' },
+    { number: 3, title: 'Machine washable, so a wet platform is not a disaster', body: 'PLACEHOLDER — persona-specific reason three.', image_prompt: 'A pair going into a washing machine drum.' },
+    { number: 4, title: 'Merino wool regulates temperature', body: 'LOCKED — shared across all 20 persona pages. Written once from the product brief.', image_prompt: 'Close crop on the wool upper showing the knit texture.' },
+    { number: 5, title: 'Made from FSC-certified eucalyptus fibre', body: 'LOCKED — shared reason.', image_prompt: '' },
+    { number: 6, title: 'Carbon footprint printed on every pair', body: 'LOCKED — shared reason.', image_prompt: 'The printed carbon figure on the shoe itself.' },
   ],
   testimonials: [
     { quote: 'Great shoes; degraded packaging! I have purchased seven pairs of All Birds shoes over the years; I love them! Comfortable, easy to keep clean, sustainable materials and just an all round fantastic shoe.', reviewer: 'Djmetz', rating: 4 },
@@ -43,5 +48,5 @@ const SAMPLE: PublicPage = {
 
 export default function PreviewPage() {
   if (process.env.NODE_ENV === 'production') notFound();
-  return <Listicle page={SAMPLE} />;
+  return <Listicle page={SAMPLE} preview />;
 }

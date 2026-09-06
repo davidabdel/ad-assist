@@ -1,0 +1,12 @@
+-- A campaign now has an image stage between approving the main page and writing
+-- the twenty.
+--
+-- It sits AFTER approval on purpose. The main page is reviewed as slots — every
+-- reason shows where its picture goes and what it should show — and the pictures
+-- are only chosen once the words are agreed. Choosing them first would mean
+-- paying to illustrate a page that gets sent back.
+--
+-- ADD VALUE lives alone in this file for the same reason 0006 does: Postgres
+-- will not let a new enum value be USED in the same transaction that adds it,
+-- and the migration runner sends one file per request.
+alter type campaign_status add value if not exists 'images' before 'personas';

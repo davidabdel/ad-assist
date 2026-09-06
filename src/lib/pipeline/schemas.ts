@@ -44,6 +44,27 @@ const ReasonSchema = z.object({
   image_prompt: z.string().describe('What a supporting image would show. Empty string if none fits.'),
 });
 
+/**
+ * The same reason, written by the persona stage, which DOES get to choose its
+ * own picture.
+ *
+ * The base page cannot: it is written before anything has looked at the photos,
+ * so its slots stay empty and the operator approves the words against a
+ * placeholder that names what should fill it. The picture arrives afterwards,
+ * from `images.ts`.
+ *
+ * A persona is written after that pass, so the library and its captions already
+ * exist and the buyer's own three reasons can each take a different photograph.
+ * An index, never a URL: a model asked for a URL invents one that resolves.
+ */
+const PersonaReasonSchema = ReasonSchema.extend({
+  image_index: z.number().describe(
+    'Index of the photo from the IMAGE LIBRARY that genuinely illustrates this '
+    + 'reason. Use -1 when no photo in the library shows what this reason claims. '
+    + '-1 is a correct answer and is expected often.',
+  ),
+});
+
 export const BasePageSchema = z.object({
   page_title: z.string(),
   meta_description: z.string(),
@@ -69,7 +90,12 @@ export const PersonaSchema = z.object({
   angle_hook: z.string().describe('The one-line angle an ad would lead with for this buyer.'),
   custom_topbar_notice: z.string().describe('Short offer bar copy for this buyer. Empty string to inherit the campaign default.'),
   custom_hero_headline: z.string().describe('Replaces the base H1 for this buyer. Keeps the listicle count.'),
-  custom_reasons: z.array(ReasonSchema).describe('Exactly 3, numbered 1-3. These replace the base page reasons 1-3.'),
+  hero_image_index: z.number().describe(
+    'Index of the photo from the IMAGE LIBRARY to put under this buyer\'s headline. '
+    + '-1 to inherit the main page\'s hero photo, which is the right answer unless a '
+    + 'different photo speaks to THIS buyer specifically.',
+  ),
+  custom_reasons: z.array(PersonaReasonSchema).describe('Exactly 3, numbered 1-3. These replace the base page reasons 1-3.'),
   proof_quote: z.object({
     quote: z.string().describe('VERBATIM from the brief. Empty string when no real review fits this buyer.'),
     reviewer: z.string(),
@@ -81,3 +107,48 @@ export type PersonaDraft = z.infer<typeof PersonaSchema>;
 export const PersonaBatchSchema = z.object({
   personas: z.array(PersonaSchema),
 });
+
+/**
+ * The image pass. One call, one look at every photograph, two jobs:
+ *
+ *   1. caption the library, because the persona stage is a batched text call and
+ *      can never see a picture — a sentence per photo is all it will ever have;
+ *   2. fill the main page's slots, which were left deliberately empty so the
+ *      words could be approved before anything was illustrated.
+ *
+ * Doing both in one call is not a shortcut. Choosing which photo illustrates
+ * reason 6 requires having looked at all thirteen, which is the same work as
+ * captioning them, so splitting it would mean paying to look twice.
+ */
+export const ImagePlanSchema = z.object({
+  images: z.array(z.object({
+    index: z.number().describe('The 0-based label of the image, exactly as given in the prompt.'),
+    caption: z.string().describe(
+      'What this photograph actually shows, in one plain sentence. Written for '
+      + 'somebody choosing it later without being able to see it.',
+    ),
+    kind: z.enum(['photo', 'graphic', 'logo']).describe(
+      "'photo' = a real photograph. 'graphic' = a diagram, chart or illustration. "
+      + "'logo' = a wordmark, badge, banner or icon.",
+    ),
+    usable: z.boolean().describe(
+      'False for logos, wordmarks, banners, icons, and anything that is mostly '
+      + 'text. These render badly at editorial width and are never the answer to '
+      + '"what does this reason look like".',
+    ),
+  })),
+  hero_image_index: z.number().describe(
+    'The photo to put under the headline: the widest, most human, most '
+    + 'immediately understandable one. -1 if none of them work.',
+  ),
+  slots: z.array(z.object({
+    reason_number: z.number().describe('Which reason this is for, 1-10.'),
+    image_index: z.number().describe(
+      '-1 when no photo in the library genuinely shows what this reason claims.',
+    ),
+    alt: z.string().describe(
+      'Alt text describing the chosen photo in the context of this reason. Empty string when the index is -1.',
+    ),
+  })).describe('One entry per reason, in order. Every reason gets an entry, including the -1s.'),
+});
+export type ImagePlan = z.infer<typeof ImagePlanSchema>;

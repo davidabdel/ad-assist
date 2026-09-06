@@ -4,14 +4,36 @@ import { CtaLink } from './CtaLink';
 /**
  * The listicle. 80% of this is locked across all 20 persona pages — layout,
  * offer block, footer, checkout trigger. The persona only swaps the top bar,
- * the H1, reasons 1-3 and the proof quote, and that swap already happened in
- * Postgres before this component saw the data.
+ * the H1, reasons 1-3, their pictures and the proof quote, and that swap
+ * already happened in Postgres before this component saw the data.
  *
  * Editorial rather than "landing page": serif headlines against sans body is
  * what makes a listicle read as an article instead of an ad, which is the whole
  * reason this format outperforms a product page in a cold feed.
+ *
+ * `preview` DRAWS THE EMPTY PICTURE SLOTS. It is on for the un-personalised
+ * base page, which is the operator's proof sheet, and OFF for every live
+ * persona URL. That split is the whole point: the base page has to show where
+ * pictures go before there are any, and a real ad destination must never show a
+ * dashed box to a buyer. An unfilled slot on a live page renders as nothing.
  */
-export function Listicle({ page }: { page: PublicPage }) {
+/**
+ * An empty picture slot, drawn at roughly the proportions a real photo will
+ * take so the page reads at its finished length rather than its current one.
+ * Preview only — see the note on `Listicle`.
+ */
+function Slot({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-5 flex min-h-32 flex-col justify-center rounded-lg border-2 border-dashed border-neutral-300 bg-neutral-50 px-5 py-6">
+      <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+        {label}
+      </p>
+      <p className="mt-1.5 text-sm leading-relaxed text-neutral-500">{children}</p>
+    </div>
+  );
+}
+
+export function Listicle({ page, preview = false }: { page: PublicPage; preview?: boolean }) {
   const personaId = page.persona_id;
 
   return (
@@ -35,6 +57,19 @@ export function Listicle({ page }: { page: PublicPage }) {
               {page.subheadline}
             </p>
           ) : null}
+
+          {page.hero_image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={page.hero_image_url}
+              alt={page.hero_image_alt ?? ''}
+              className="mt-7 w-full rounded-xl border border-neutral-200"
+            />
+          ) : preview ? (
+            <Slot label="Hero picture">
+              The widest, most human photo from the product page goes here.
+            </Slot>
+          ) : null}
         </header>
 
         <hr className="my-10 border-neutral-200" />
@@ -57,10 +92,14 @@ export function Listicle({ page }: { page: PublicPage }) {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={r.image_url}
-                    alt=""
+                    alt={r.image_alt ?? ''}
                     loading="lazy"
                     className="mt-5 w-full rounded-lg border border-neutral-200"
                   />
+                ) : preview ? (
+                  <Slot label={`Picture for reason ${r.number ?? i + 1}`}>
+                    {r.image_prompt?.trim() || 'No picture planned for this reason.'}
+                  </Slot>
                 ) : null}
               </div>
             </li>

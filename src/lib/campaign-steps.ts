@@ -26,14 +26,16 @@ const RANK: Record<string, number> = {
   pending: 0,
   scraping: 1,
   base_review: 2,
-  personas: 3,
-  pages_built: 4,
+  images: 3,
+  personas: 4,
+  pages_built: 5,
 };
 
 export const STATUS_LABEL: Record<string, string> = {
   pending: 'Not started yet',
   scraping: 'Reading your product page',
   base_review: 'Waiting for you to approve the main page',
+  images: 'Choosing photos for your page',
   personas: 'Writing your landing pages',
   // No count here on purpose: the list endpoint does not return one, and a run
   // that stopped short would otherwise be labelled with a number it did not reach.
@@ -64,9 +66,18 @@ export function buildSteps(input: {
   usesMac: boolean;
   /** The base page exists. It is the gate, so its presence is its own step. */
   hasBasePage: boolean;
+  /**
+   * The image library exists, which is the only durable trace that the picture
+   * stage ran. Needed to tell a campaign that died choosing photos from one
+   * that died writing pages, since `failed` does not rewind the status.
+   */
+  hasImages: boolean;
+  /** How many photos ended up on the main page, hero included. */
+  imagesPlaced: number;
 }): Step[] {
   const {
     status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone, usesMac, hasBasePage,
+    hasImages, imagesPlaced,
   } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
@@ -76,9 +87,10 @@ export function buildSteps(input: {
   // a brief means the scrape and the summary both landed, and whether a base
   // page exists says which of the two writing steps was in flight.
   const failedAt = !failed ? -1
-    : personaCount > 0 || hasBasePage ? 3
-      : hasBrief ? 2
-        : ingestFailed ? 0 : 1;
+    : personaCount > 0 || hasImages ? 4
+      : hasBasePage ? 3
+        : hasBrief ? 2
+          : ingestFailed ? 0 : 1;
 
   const mark = (index: number, done: boolean, active: boolean): StepState => {
     if (failed) {
@@ -125,14 +137,25 @@ export function buildSteps(input: {
       state: mark(2, rank >= 3, rank === 2),
     },
     {
+      key: 'images',
+      title: 'Choosing photos from your own site',
+      detail: hasImages
+        ? `${imagesPlaced} of your own photos are on the main page. Nothing was generated `
+          + 'and nothing was paid for — every picture is one that was already on your site.'
+        : 'The photos on your product page get read, described, and put against the reasons '
+          + 'they actually show. A reason no photo genuinely illustrates keeps its empty slot '
+          + 'rather than borrowing an unrelated picture.',
+      state: mark(3, rank >= 4, rank === 3),
+    },
+    {
       key: 'pages',
       title: `Writing ${PERSONA_TARGET} landing pages`,
       detail: personaCount > 0 && personaCount < PERSONA_TARGET
         ? `${personaCount} of ${PERSONA_TARGET} written. Each one is a different kind of buyer, `
           + 'with their own headline and their own reasons to buy.'
         : 'One page per kind of buyer — the nervous first-timer, the gift buyer, the upgrader — '
-          + 'each with its own headline and its own reasons.',
-      state: mark(3, rank >= 4, rank === 3),
+          + 'each with its own headline, its own reasons and its own pictures.',
+      state: mark(4, rank >= 5, rank === 4),
     },
     {
       key: 'scan',

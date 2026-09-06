@@ -40,12 +40,26 @@ type Persona = {
 
 type Job = { kind: string; status: string; error_message: string | null; notes: string | null };
 
-type Reason = { number: number; title: string; body: string };
+type Reason = {
+  number: number;
+  title: string;
+  body: string;
+  image_prompt?: string | null;
+  image_url?: string | null;
+};
 type Testimonial = { quote: string; reviewer?: string | null; rating?: number | null };
+type CampaignImage = {
+  position: number;
+  source_url: string;
+  caption: string | null;
+  kind: string;
+  usable: boolean;
+};
 
 type BasePageView = {
   hero_headline: string;
   hero_subheadline: string | null;
+  hero_image_url: string | null;
   reasons: Reason[];
   testimonials: Testimonial[] | null;
   offer_headline: string;
@@ -61,6 +75,10 @@ type CampaignView = {
     base_page_guidance: string | null;
   };
   base_page: BasePageView | null;
+  /** Chosen photos. Empty until the picture stage runs, which is after approval. */
+  images: CampaignImage[];
+  /** Every photo the ingest found, chosen or not. Available from the brief onwards. */
+  brief: { image_urls?: string[] } | null;
   personas: Persona[];
   jobs: Job[];
 };
@@ -172,7 +190,8 @@ export function CampaignProgress({ id }: { id: string }) {
     );
   }
 
-  const { campaign, personas, jobs, base_page: basePage } = view;
+  const { campaign, personas, jobs, base_page: basePage, images, brief } = view;
+  const foundPhotos = brief?.image_urls ?? [];
   const failed = campaign.status === 'failed';
   const finished = campaign.status === 'pages_built';
   const ingest = jobs.find((j) => j.kind === 'ingest');
@@ -194,6 +213,9 @@ export function CampaignProgress({ id }: { id: string }) {
     // the page, so the usual case is "no job, and the read already happened".
     ingestDone: campaign.status !== 'pending' && !waitingOnMac,
     usesMac: Boolean(ingest),
+    hasImages: images.length > 0,
+    imagesPlaced: (basePage?.reasons ?? []).filter((r) => r.image_url).length
+      + (basePage?.hero_image_url ? 1 : 0),
   });
 
   return (
@@ -282,6 +304,7 @@ export function CampaignProgress({ id }: { id: string }) {
           page={basePage}
           slug={campaign.slug}
           lastGuidance={campaign.base_page_guidance}
+          foundPhotos={foundPhotos}
           onDecide={decideBasePage}
         />
       ) : null}
@@ -349,11 +372,12 @@ function Bullet({ state, spinning }: { state: StepState; spinning: boolean }) {
  * approved, so they have to be readable without leaving the screen.
  */
 function BasePageReview({
-  page, slug, lastGuidance, onDecide,
+  page, slug, lastGuidance, foundPhotos, onDecide,
 }: {
   page: BasePageView;
   slug: string;
   lastGuidance: string | null;
+  foundPhotos: string[];
   onDecide: (action: 'approve' | 'rewrite', guidance?: string) => Promise<void>;
 }) {
   const [guidance, setGuidance] = useState('');
@@ -399,6 +423,41 @@ function BasePageReview({
           </div>
         ) : null}
 
+        {/* The pictures have deliberately not been chosen yet — the words are what
+            is being approved here. Showing what WILL be available, and where it
+            will go, is the difference between "this page is bare" and "this page
+            is not finished yet". The first run shipped without either. */}
+        <div className="mt-4">
+          {foundPhotos.length ? (
+            <Callout tone="info" title={`${foundPhotos.length} photos found on your site`}>
+              <p>
+                Nothing has been placed yet. Approve this page and each of the ten reasons
+                below gets the photo that genuinely shows what it claims — a reason none of
+                them fits keeps its empty slot rather than borrowing an unrelated picture.
+                No pictures are generated and nothing is charged.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {foundPhotos.slice(0, 16).map((url) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={url}
+                    src={url}
+                    alt=""
+                    loading="lazy"
+                    className="size-14 rounded-md border border-black/10 object-cover"
+                  />
+                ))}
+              </div>
+            </Callout>
+          ) : (
+            <Callout tone="warn" title="No photos were found on your page">
+              All {PERSONA_TARGET} pages will be text only. Nothing here invents a picture, so
+              if the pages need images, point the campaign at a page that has product photos
+              on it.
+            </Callout>
+          )}
+        </div>
+
         <div className="mt-6 space-y-5 border-t border-zinc-200 pt-6">
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">Headline</p>
@@ -432,6 +491,16 @@ function BasePageReview({
                       ) : null}
                     </p>
                     <p className="mt-0.5 text-sm leading-6 text-zinc-600">{r.body}</p>
+                    {/* The slot, named. What goes here is decided after approval,
+                        so what is shown is what the copy says it should be. */}
+                    {r.image_prompt?.trim() ? (
+                      <p className="mt-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500">
+                        <span className="font-bold uppercase tracking-wide text-zinc-400">
+                          Picture slot ·{' '}
+                        </span>
+                        {r.image_prompt}
+                      </p>
+                    ) : null}
                   </div>
                 </li>
               ))}
