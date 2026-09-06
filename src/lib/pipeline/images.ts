@@ -31,6 +31,72 @@ import type { Reason } from '@/lib/page-data';
  */
 const MAX_IMAGES = 24;
 
+/**
+ * Well above a product photo and well below anything that would make the
+ * request unwieldy. A URL that serves more than this is not a product photo.
+ */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * WE FETCH THE PHOTOS OURSELVES RATHER THAN HANDING OVER URLs.
+ *
+ * The first live run failed on exactly that: the model was given the seller's
+ * own image URLs and came back `400 Unable to download content from the
+ * provided URL before the timeout`. Those URLs were fine — curl pulls them in
+ * 40ms — but they are behind a CDN that refuses some clients (python-urllib
+ * gets a bare 403) and they carry a second unencoded `https://` inside the
+ * path, which is enough to defeat a fetcher that normalises URLs.
+ *
+ * Neither of those is fixable from here, and both will recur: every campaign
+ * points at somebody else's CDN. Reading the bytes on our own server and
+ * sending them inline removes the third party from the loop entirely, and it
+ * is the same fetch, with the same browser headers, that already reads the
+ * product page.
+ */
+const IMAGE_HEADERS: Record<string, string> = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+  Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+  'Accept-Language': 'en-AU,en;q=0.9',
+  'Sec-Fetch-Dest': 'image',
+  'Sec-Fetch-Mode': 'no-cors',
+  'Sec-Fetch-Site': 'cross-site',
+};
+
+async function asDataUrl(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: IMAGE_HEADERS,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+
+    const type = (res.headers.get('content-type') ?? '').split(';')[0].trim();
+    // The four the API accepts. A CDN that returns `application/octet-stream`
+    // for a webp is common enough to be worth the sniff below rather than a
+    // rejection.
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
+
+    const mime = /^image\/(png|jpeg|webp|gif)$/.test(type) ? type : sniff(buf);
+    return mime ? `data:${mime};base64,${buf.toString('base64')}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Magic bytes, for the CDNs that mislabel what they serve. */
+function sniff(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf.subarray(0, 3).toString('latin1') === 'GIF') return 'image/gif';
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF'
+    && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
 const SYSTEM = `You are an art director choosing photographs for a listicle
 landing page. Every photograph you are shown was taken off the seller's own
 website, so it is the real product and the real brand.
@@ -69,6 +135,8 @@ function slotList(reasons: Reason[]): string {
 
 export type ImagePlanResult = {
   plan: ImagePlan;
+  /** Positions whose bytes could not be read. Never usable, never chosen. */
+  unreadable: number[];
   usage: { input: number; output: number };
 };
 
@@ -78,22 +146,43 @@ export async function planImages(
   imageUrls: string[],
 ): Promise<ImagePlanResult> {
   const urls = imageUrls.slice(0, MAX_IMAGES);
-  const labels = urls.map((_, i) => `IMAGE ${i}`).join(', ');
+
+  // Positions are the library's identity — the persona stage refers to a photo
+  // by its number — so a photo we cannot read is skipped rather than closing the
+  // gap. Index 7 is index 7 whether or not index 3 loaded.
+  const fetched = await Promise.all(urls.map((u) => asDataUrl(u)));
+  const readable = fetched
+    .map((dataUrl, position) => ({ position, dataUrl }))
+    .filter((i): i is { position: number; dataUrl: string } => i.dataUrl !== null);
+  const unreadable = fetched
+    .map((d, position) => (d === null ? position : -1))
+    .filter((p) => p >= 0);
+
+  if (!readable.length) {
+    throw new Error(
+      `none of the ${urls.length} photographs on the page could be downloaded `
+      + '— the site may be blocking us, or the links may be dead',
+    );
+  }
+
+  const labels = readable.map((i) => `IMAGE ${i.position}`).join(', ');
 
   const { data, usage } = await generate({
     system: SYSTEM,
     cachedContext: `PRODUCT\n---\n${brief.brand_name} — ${brief.product_name}\n`
       + `${brief.one_line_summary}\n---`,
-    prompt: `${urls.length} photographs from this seller's website are attached below, `
-      + `in order: ${labels}. Index 0 is the first one attached.\n\n`
+    prompt: `${readable.length} photographs from this seller's website are attached below, `
+      + `in this order: ${labels}. Use those numbers as the index — they are not `
+      + 'always consecutive, because a photo that could not be downloaded is '
+      + 'skipped and keeps its number.\n\n'
       + 'Caption all of them, pick the hero, and fill the slots below.\n\n'
       + `THE PAGE'S ${reasons.length} SLOTS\n---\n${slotList(reasons)}\n---`,
-    images: urls,
+    images: readable.map((i) => i.dataUrl),
     schema: ImagePlanSchema,
     maxTokens: 8000,
   });
 
-  return { plan: data, usage };
+  return { plan: data, unreadable, usage };
 }
 
 export type ResolvedImages = {
@@ -121,9 +210,14 @@ export type ResolvedImages = {
  * expensive to notice on a live page, and a rule that is only in a prompt is a
  * rule that holds most of the time.
  */
-export function resolveImages(plan: ImagePlan, imageUrls: string[]): ResolvedImages {
+export function resolveImages(
+  plan: ImagePlan,
+  imageUrls: string[],
+  unreadable: number[] = [],
+): ResolvedImages {
   const urls = imageUrls.slice(0, MAX_IMAGES);
   const notes: string[] = [];
+  const couldNotRead = new Set(unreadable);
 
   const described = new Map(plan.images.map((i) => [i.index, i]));
   const library = urls.map((source_url, position) => {
@@ -133,12 +227,17 @@ export function resolveImages(plan: ImagePlan, imageUrls: string[]): ResolvedIma
       source_url,
       caption: d?.caption ?? '',
       kind: d?.kind ?? 'photo' as const,
-      // No caption means the model skipped it. Unusable rather than assumed
-      // usable: the persona stage picks by caption, and an empty caption is an
-      // invitation to pick blind.
-      usable: d ? d.usable && d.kind === 'photo' : false,
+      // No caption means the model skipped it, or we never got the bytes to show
+      // it. Unusable either way rather than assumed usable: the persona stage
+      // picks by caption, and an empty caption is an invitation to pick blind.
+      usable: d ? d.usable && d.kind === 'photo' && !couldNotRead.has(position) : false,
     };
   });
+
+  if (couldNotRead.size) {
+    notes.push(`${couldNotRead.size} of ${urls.length} photos could not be downloaded from `
+      + 'your site and were left out.');
+  }
 
   const used = new Set<number>();
   const take = (index: number, what: string): { url: string; alt: string } | null => {

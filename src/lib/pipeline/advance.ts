@@ -319,8 +319,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const reasons = basePage.reasons as Reason[];
       let resolved;
       try {
-        const { plan } = await planImages(brief, reasons, urls);
-        resolved = resolveImages(plan, urls);
+        const { plan, unreadable } = await planImages(brief, reasons, urls);
+        resolved = resolveImages(plan, urls, unreadable);
       } catch (e) {
         return fail(campaign.id, `Could not choose the pictures: ${(e as Error).message}`);
       }
