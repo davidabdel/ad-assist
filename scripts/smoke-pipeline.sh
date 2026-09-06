@@ -71,6 +71,12 @@ CID=$(print -r -- "$CREATE" \
 echo "campaign $CID"
 
 echo "\n── advance ───────────────────────────────────────────"
+# The run now stops at `base_review` and will not write a single persona page
+# until the base page is approved. The script plays the operator: it sends the
+# first version back with a note (proving a rejection is honoured and the note
+# reaches the rewrite), then approves the second.
+REWRITE_TESTED=0
+
 for i in {1..40}; do
   OUT=$(curl -s -X POST "$BASE/api/campaigns/$CID/advance" -H "Authorization: Bearer $TOKEN")
   set +e
@@ -81,11 +87,41 @@ if 'error' in d:
     print('  ERROR:', d['error']); sys.exit(2)
 print(f\"  [{d['status']}] {d['did']}\")
 for n in (d.get('notes') or []): print(f'      · {n}')
+if d.get('awaitingApproval'): sys.exit(5)
 sys.exit(3 if d['terminal'] else (4 if d['waiting'] else 0))
 "
   rc=$?
   set -e
   [[ $rc == 2 ]] && exit 1
+
+  if [[ $rc == 5 ]]; then
+    # The gate is the point of the test: assert nothing downstream was written
+    # while it was closed. A gate that lets 20 pages through is not a gate.
+    N=$(curl -s "$BASE/api/campaigns/$CID" -H "Authorization: Bearer $TOKEN" \
+      | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["personas"]))')
+    if [[ "$N" != "0" ]]; then
+      echo "  FAIL: $N persona pages exist while the base page is still unapproved"
+      exit 1
+    fi
+    echo "  gate holding: 0 persona pages written"
+
+    if [[ $REWRITE_TESTED == 0 ]]; then
+      REWRITE_TESTED=1
+      echo "  → sending it back with a note"
+      curl -s -X POST "$BASE/api/campaigns/$CID/base-page" \
+        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+        -d '{"action":"rewrite","guidance":"Lead reason 1 on comfort for all-day wear, not on materials."}' \
+        | python3 -c 'import json,sys;d=json.load(sys.stdin);print("   ",d.get("did") or d.get("error"))'
+    else
+      echo "  → approving"
+      curl -s -X POST "$BASE/api/campaigns/$CID/base-page" \
+        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+        -d '{"action":"approve"}' \
+        | python3 -c 'import json,sys;d=json.load(sys.stdin);print("   ",d.get("did") or d.get("error"))'
+    fi
+    continue
+  fi
+
   # terminal covers both outcomes: 20 pages built, or failed and needing a human.
   [[ $rc == 3 ]] && break
   # 4 means the next move belongs to the worker — back off instead of spinning.

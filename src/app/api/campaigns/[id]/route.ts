@@ -22,7 +22,13 @@ export async function GET(
       db.from('personas')
         .select('persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count')
         .eq('campaign_id', id).order('persona_index'),
-      db.from('base_pages').select('hero_headline, cta_url').eq('campaign_id', id).maybeSingle(),
+      // The whole page, not a summary: the approval checkpoint is the operator
+      // reading what will be copied onto twenty pages, and it has to be readable
+      // without leaving the dashboard.
+      db.from('base_pages')
+        .select('hero_headline, hero_subheadline, reasons, testimonials, '
+          + 'offer_headline, offer_body, cta_button_text, cta_url')
+        .eq('campaign_id', id).maybeSingle(),
       db.from('scanner_jobs')
         .select('kind, status, attempts, notes, error_message, created_at, completed_at')
         .eq('campaign_id', id).order('created_at', { ascending: false }),
@@ -39,6 +45,7 @@ export async function GET(
         source_url: campaign.source_url,
         error_message: campaign.error_message,
         has_brief: Boolean(campaign.scraped_data?.brief),
+        base_page_guidance: campaign.base_page_guidance,
       },
       brief: campaign.scraped_data?.brief ?? null,
       base_page: base ?? null,

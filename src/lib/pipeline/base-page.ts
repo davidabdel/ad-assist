@@ -39,13 +39,28 @@ RULES
 - If the brief's "gaps" list says something is unknown, work around it. Never
   fill a gap with a plausible guess.`;
 
+/**
+ * `guidance` is what the operator said was wrong with the previous attempt. It
+ * arrives only on a rewrite, and it is appended rather than folded into the
+ * system prompt so a rejected page is corrected on the stated point instead of
+ * rerolled and hoped over.
+ */
 export async function buildBasePage(
   brief: ProductBrief,
+  guidance?: string | null,
 ): Promise<{ page: BasePage; usage: { input: number; output: number } }> {
+  const note = guidance?.trim();
   const { data, usage } = await generate({
     system: SYSTEM,
     cachedContext: `PRODUCT BRIEF\n---\n${JSON.stringify(brief, null, 2)}\n---`,
-    prompt: 'Write the base listicle page for this product.',
+    prompt: note
+      ? 'Write the base listicle page for this product. A previous attempt was '
+        + `rejected. What the operator asked to be different:\n\n${note}\n\n`
+        + 'Address that specifically. Every rule above still applies — in particular, '
+        + 'do not invent a feature, a testimonial or an offer to satisfy the request. '
+        + 'If what was asked for is not supported by the brief, write the closest thing '
+        + 'that is true.'
+      : 'Write the base listicle page for this product.',
     schema: BasePageSchema,
     maxTokens: 16000,
   });

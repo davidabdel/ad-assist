@@ -33,22 +33,37 @@ export async function POST(
     }
 
     const db = serviceClient();
-    const { count } = await db.from('personas')
-      .select('id', { count: 'exact', head: true }).eq('campaign_id', id);
-
+    const [{ count }, { data: base }] = await Promise.all([
+      db.from('personas').select('id', { count: 'exact', head: true }).eq('campaign_id', id),
+      db.from('base_pages').select('id').eq('campaign_id', id).maybeSingle(),
+    ]);
+    const personaCount = count ?? 0;
     const hasBrief = Boolean(campaign.scraped_data?.brief);
-    // A brief, or any persona already written, means the scrape is behind us.
-    const status = hasBrief || (count ?? 0) > 0 ? 'personas' : 'pending';
 
-    const { error } = await db.from('campaigns')
-      .update({ status, error_message: null }).eq('id', id);
+    // A persona means the base page was approved, so the gate is behind us. A
+    // base page with no personas is ambiguous — it may never have been approved —
+    // so it rewinds to the checkpoint and asks again. Re-approving costs a click;
+    // skipping a gate that was never passed costs twenty pages.
+    const status = personaCount > 0 ? 'personas'
+      : hasBrief || base ? 'base_review'
+        : 'pending';
+
+    const { error } = await db.from('campaigns').update({
+      status,
+      error_message: null,
+      // A driver that died mid-batch left this set. Clearing it here means a
+      // retry starts now rather than after the five-minute expiry.
+      persona_lock_at: null,
+    }).eq('id', id);
     if (error) return Response.json({ error: error.message }, { status: 500 });
 
     return Response.json({
       status,
       did: status === 'pending'
         ? 'Starting again from reading your product page.'
-        : `Carrying on from ${count ?? 0} of 20 landing pages.`,
+        : status === 'base_review'
+          ? 'Back to the main page, for you to approve before the twenty are written.'
+          : `Carrying on from ${personaCount} of 20 landing pages.`,
     });
   } catch (e) {
     if (e instanceof AuthError) return Response.json({ error: e.message }, { status: e.status });

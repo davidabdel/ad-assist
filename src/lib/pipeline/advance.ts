@@ -39,6 +39,11 @@ export type AdvanceResult = {
    * campaign and retries forever.
    */
   terminal: boolean;
+  /**
+   * true when the stop is a deliberate checkpoint rather than an ending. The
+   * screen shows an approval card instead of "finished" or "stopped".
+   */
+  awaitingApproval?: boolean;
   personas?: number;
   notes?: string[];
 };
@@ -52,6 +57,7 @@ type CampaignRow = {
   checkout_url: string | null;
   current_offer: string | null;
   status: string;
+  base_page_guidance: string | null;
   scraped_data: { raw?: Record<string, unknown>; brief?: ProductBrief } | null;
 };
 
@@ -186,18 +192,85 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
 
       await db.from('campaigns').update({
         scraped_data: { ...(campaign.scraped_data ?? {}), brief },
-        status: 'personas',
+        status: 'base_review',
         error_message: null,
       }).eq('id', campaign.id);
 
       return {
-        status: 'personas', done: false, waiting: false, terminal: false, notes,
+        status: 'base_review', done: false, waiting: false, terminal: false, notes,
         did: `Product brief written: ${brief.product_name} — `
           + `${brief.features.length} features, ${brief.review_snippets.length} real review quotes.`,
       };
     }
 
-    // ── base page, then personas five at a time ─────────────────────────
+    // ── write the base page, then STOP for approval ─────────────────────
+    // Reasons 4-10 of this page are copied unchanged onto all twenty persona
+    // pages, so a wrong base page is twenty wrong pages. It is the one artefact
+    // in the run worth a human's thirty seconds, and the only place a mistake is
+    // cheap to fix.
+    case 'base_review': {
+      const brief = campaign.scraped_data?.brief;
+      if (!brief) return fail(campaign.id, 'Reached the base page stage with no product brief.');
+
+      const { data: existingBase } = await db.from('base_pages')
+        .select('hero_headline').eq('campaign_id', campaign.id).maybeSingle();
+
+      if (existingBase) {
+        return {
+          status: 'base_review', done: false, waiting: false, terminal: true,
+          awaitingApproval: true,
+          did: 'The main page is written and waiting for you to read it. '
+            + 'Nothing else runs until you approve it.',
+        };
+      }
+
+      let page: BasePage;
+      try {
+        ({ page } = await buildBasePage(brief, campaign.base_page_guidance));
+      } catch (e) {
+        return fail(campaign.id, `Could not write the base page: ${(e as Error).message}`);
+      }
+      const { error } = await db.from('base_pages').insert({
+        campaign_id: campaign.id,
+        page_title: page.page_title,
+        meta_description: page.meta_description,
+        hero_headline: page.hero_headline,
+        hero_subheadline: page.hero_subheadline,
+        reasons: page.reasons,
+        testimonials: page.testimonials,
+        offer_headline: page.offer_headline,
+        offer_body: page.offer_body,
+        cta_button_text: page.cta_button_text,
+        // The CTA is the operator's checkout. Falling back to the product page
+        // is better than a dead button, and is stated rather than silent.
+        cta_url: campaign.checkout_url || campaign.source_url || '#',
+      });
+      if (error) return fail(campaign.id, `Could not save the base page: ${error.message}`);
+
+      const notes: string[] = [];
+      if (!campaign.checkout_url) {
+        notes.push('No checkout URL set, so the CTA points at the product page. '
+          + 'Set one before running ads.');
+      }
+      // Said here rather than left for him to notice: an empty testimonials array
+      // means every one of the twenty pages ships with no proof section, and the
+      // usual cause is a brief built from a home page instead of a product page.
+      if (!page.testimonials.length) {
+        notes.push('No real customer reviews were found, so this page has no testimonials '
+          + 'and neither will the twenty. If the product page has reviews on it, point the '
+          + 'campaign at that page rather than the home page and run it again.');
+      }
+
+      return {
+        status: 'base_review', done: false, waiting: false, terminal: true,
+        awaitingApproval: true,
+        did: `Main page written: "${page.hero_headline}" — 10 reasons, `
+          + `${page.testimonials.length} real testimonials. Read it and approve it.`,
+        notes,
+      };
+    }
+
+    // ── personas, five at a time ────────────────────────────────────────
     case 'personas': {
       const brief = campaign.scraped_data?.brief;
       if (!brief) return fail(campaign.id, 'Reached the persona stage with no product brief.');
@@ -205,123 +278,125 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const { data: basePage } = await db.from('base_pages')
         .select('*').eq('campaign_id', campaign.id).maybeSingle();
 
+      // Only reachable by approving a base page, so a missing one is a real
+      // inconsistency rather than "not written yet". Send it back to be written.
       if (!basePage) {
-        let page: BasePage;
-        try {
-          ({ page } = await buildBasePage(brief));
-        } catch (e) {
-          return fail(campaign.id, `Could not write the base page: ${(e as Error).message}`);
-        }
-        const { error } = await db.from('base_pages').insert({
-          campaign_id: campaign.id,
-          page_title: page.page_title,
-          meta_description: page.meta_description,
-          hero_headline: page.hero_headline,
-          hero_subheadline: page.hero_subheadline,
-          reasons: page.reasons,
-          testimonials: page.testimonials,
-          offer_headline: page.offer_headline,
-          offer_body: page.offer_body,
-          cta_button_text: page.cta_button_text,
-          // The CTA is the operator's checkout. Falling back to the product page
-          // is better than a dead button, and is stated rather than silent.
-          cta_url: campaign.checkout_url || campaign.source_url || '#',
-        });
-        if (error) return fail(campaign.id, `Could not save the base page: ${error.message}`);
-
+        await db.from('campaigns').update({ status: 'base_review' }).eq('id', campaign.id);
         return {
-          status: 'personas', done: false, waiting: false, terminal: false,
-          did: `Base page written: "${page.hero_headline}" — 10 reasons, `
-            + `${page.testimonials.length} real testimonials.`,
-          notes: campaign.checkout_url ? [] : ['No checkout URL set, so the CTA points at the '
-            + 'product page. Set one before running ads.'],
+          status: 'base_review', done: false, waiting: false, terminal: false,
+          did: 'The approved main page is missing. Writing it again.',
         };
       }
 
-      const { data: existingRows } = await db.from('personas')
-        .select('persona_index, persona_name, primary_pain_point, slug')
-        .eq('campaign_id', campaign.id).order('persona_index');
-      const existing: ExistingPersona[] = existingRows ?? [];
-
-      if (existing.length >= PERSONA_TARGET) {
-        await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
+      // One driver per campaign. Two tabs, or a phone and a laptop, are two
+      // drivers: without this they both read the same count, both write the same
+      // persona_index, and the loser dies on the unique constraint after paying
+      // for a full batch. Claimed BEFORE the model call so the loser pays
+      // nothing. See 0007_persona_batch_lock.sql.
+      const { data: claimed, error: claimError } = await db
+        .rpc('claim_persona_batch', { p_campaign: campaign.id });
+      if (claimError) return fail(campaign.id, `Could not claim the batch: ${claimError.message}`);
+      if (!claimed) {
         return {
-          status: 'pages_built', done: true, waiting: false, terminal: true,
-          personas: existing.length,
-          did: `All ${existing.length} persona pages are live.`,
+          status: 'personas', done: false, waiting: true, terminal: false,
+          did: 'Another window is already writing this batch. Waiting for it rather than '
+            + 'writing the same pages twice.',
         };
       }
 
-      const want = Math.min(PERSONA_BATCH, PERSONA_TARGET - existing.length);
-      const rejectedNotes: string[] = [];
-      let added = 0;
+      try {
+        // Read under the claim, not before it: a count taken outside the lock is
+        // the stale read this whole mechanism exists to prevent.
+        const { data: existingRows } = await db.from('personas')
+          .select('persona_index, persona_name, primary_pain_point, slug')
+          .eq('campaign_id', campaign.id).order('persona_index');
+        const existing: ExistingPersona[] = existingRows ?? [];
 
-      for (let attempt = 1; attempt <= MAX_EMPTY_BATCHES && added === 0; attempt += 1) {
-        let batch;
-        try {
-          // Rebuild the shape rather than pass the row: ids and timestamps in the
-          // prompt are tokens spent on nothing, and invite the model to echo them.
-          const forPrompt: BasePage = {
-            page_title: basePage.page_title,
-            meta_description: basePage.meta_description ?? '',
-            hero_headline: basePage.hero_headline,
-            hero_subheadline: basePage.hero_subheadline ?? '',
-            reasons: basePage.reasons,
-            testimonials: basePage.testimonials,
-            offer_headline: basePage.offer_headline,
-            offer_body: basePage.offer_body ?? '',
-            cta_button_text: basePage.cta_button_text,
+        if (existing.length >= PERSONA_TARGET) {
+          await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
+          return {
+            status: 'pages_built', done: true, waiting: false, terminal: true,
+            personas: existing.length,
+            did: `All ${existing.length} persona pages are live.`,
           };
-          batch = await generatePersonaBatch(brief, forPrompt, existing, want);
-        } catch (e) {
-          return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
         }
-        for (const r of batch.rejected) {
-          rejectedNotes.push(`dropped "${r.persona_name}": ${r.reason}`);
+
+        const want = Math.min(PERSONA_BATCH, PERSONA_TARGET - existing.length);
+        const rejectedNotes: string[] = [];
+        let added = 0;
+
+        for (let attempt = 1; attempt <= MAX_EMPTY_BATCHES && added === 0; attempt += 1) {
+          let batch;
+          try {
+            // Rebuild the shape rather than pass the row: ids and timestamps in the
+            // prompt are tokens spent on nothing, and invite the model to echo them.
+            const forPrompt: BasePage = {
+              page_title: basePage.page_title,
+              meta_description: basePage.meta_description ?? '',
+              hero_headline: basePage.hero_headline,
+              hero_subheadline: basePage.hero_subheadline ?? '',
+              reasons: basePage.reasons,
+              testimonials: basePage.testimonials,
+              offer_headline: basePage.offer_headline,
+              offer_body: basePage.offer_body ?? '',
+              cta_button_text: basePage.cta_button_text,
+            };
+            batch = await generatePersonaBatch(brief, forPrompt, existing, want);
+          } catch (e) {
+            return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
+          }
+          for (const r of batch.rejected) {
+            rejectedNotes.push(`dropped "${r.persona_name}": ${r.reason}`);
+          }
+          if (!batch.personas.length) continue;
+
+          const nextIndex = (existingRows?.at(-1)?.persona_index ?? 0) + 1;
+          const rows = batch.personas.slice(0, want).map((p, i) => ({
+            campaign_id: campaign.id,
+            persona_index: nextIndex + i,
+            slug: p.slug,
+            persona_name: p.persona_name,
+            primary_pain_point: p.primary_pain_point,
+            core_desire: p.core_desire,
+            angle_hook: p.angle_hook,
+            custom_topbar_notice: p.custom_topbar_notice || null,
+            custom_hero_headline: p.custom_hero_headline,
+            custom_reasons: p.custom_reasons,
+            // An empty quote means no real review fitted. Store null, not an empty
+            // testimonial — the page renders nothing rather than an empty card.
+            proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
+          }));
+          const { error } = await db.from('personas').insert(rows);
+          if (error) return fail(campaign.id, `Could not save personas: ${error.message}`);
+          added = rows.length;
         }
-        if (!batch.personas.length) continue;
 
-        const nextIndex = (existingRows?.at(-1)?.persona_index ?? 0) + 1;
-        const rows = batch.personas.slice(0, want).map((p, i) => ({
-          campaign_id: campaign.id,
-          persona_index: nextIndex + i,
-          slug: p.slug,
-          persona_name: p.persona_name,
-          primary_pain_point: p.primary_pain_point,
-          core_desire: p.core_desire,
-          angle_hook: p.angle_hook,
-          custom_topbar_notice: p.custom_topbar_notice || null,
-          custom_hero_headline: p.custom_hero_headline,
-          custom_reasons: p.custom_reasons,
-          // An empty quote means no real review fitted. Store null, not an empty
-          // testimonial — the page renders nothing rather than an empty card.
-          proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
-        }));
-        const { error } = await db.from('personas').insert(rows);
-        if (error) return fail(campaign.id, `Could not save personas: ${error.message}`);
-        added = rows.length;
-      }
+        if (added === 0) {
+          return fail(campaign.id,
+            `Ran ${MAX_EMPTY_BATCHES} persona batches and every persona duplicated an existing `
+            + `pain point. Stopped at ${existing.length} of ${PERSONA_TARGET} rather than shipping `
+            + 'near-identical pages. The product may not support 20 genuinely different buyers.');
+        }
 
-      if (added === 0) {
-        return fail(campaign.id,
-          `Ran ${MAX_EMPTY_BATCHES} persona batches and every persona duplicated an existing `
-          + `pain point. Stopped at ${existing.length} of ${PERSONA_TARGET} rather than shipping `
-          + 'near-identical pages. The product may not support 20 genuinely different buyers.');
+        const total = existing.length + added;
+        if (total >= PERSONA_TARGET) {
+          await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
+        }
+        return {
+          status: total >= PERSONA_TARGET ? 'pages_built' : 'personas',
+          done: total >= PERSONA_TARGET,
+          waiting: false,
+          terminal: total >= PERSONA_TARGET,
+          personas: total,
+          did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${PERSONA_TARGET}).`,
+          notes: rejectedNotes,
+        };
+      } finally {
+        // Every path above returns, including the fail() ones. Releasing here
+        // rather than at each return is what keeps the next call from waiting out
+        // the five-minute expiry after an ordinary failure.
+        await db.rpc('release_persona_batch', { p_campaign: campaign.id });
       }
-
-      const total = existing.length + added;
-      if (total >= PERSONA_TARGET) {
-        await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
-      }
-      return {
-        status: total >= PERSONA_TARGET ? 'pages_built' : 'personas',
-        done: total >= PERSONA_TARGET,
-        waiting: false,
-        terminal: total >= PERSONA_TARGET,
-        personas: total,
-        did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${PERSONA_TARGET}).`,
-        notes: rejectedNotes,
-      };
     }
 
     case 'pages_built':

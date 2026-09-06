@@ -1,0 +1,12 @@
+-- A campaign now stops after the base page and waits to be approved.
+--
+-- Reasons 4-10 of the base page are copied unchanged onto all twenty persona
+-- pages. A base page that is wrong is therefore twenty wrong pages, and the
+-- first run proved it: the brief was built from a home page rather than a
+-- product page, came back with zero real review quotes, and all twenty pages
+-- were written from it before anybody saw it.
+--
+-- ADD VALUE lives alone in this file on purpose. Postgres will not let a new
+-- enum value be USED in the same transaction that adds it, and the migration
+-- runner sends one file per request.
+alter type campaign_status add value if not exists 'base_review' before 'personas';

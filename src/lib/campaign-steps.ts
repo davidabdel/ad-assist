@@ -25,13 +25,15 @@ export type Step = {
 const RANK: Record<string, number> = {
   pending: 0,
   scraping: 1,
-  personas: 2,
-  pages_built: 3,
+  base_review: 2,
+  personas: 3,
+  pages_built: 4,
 };
 
 export const STATUS_LABEL: Record<string, string> = {
   pending: 'Not started yet',
   scraping: 'Reading your product page',
+  base_review: 'Waiting for you to approve the main page',
   personas: 'Writing your landing pages',
   // No count here on purpose: the list endpoint does not return one, and a run
   // that stopped short would otherwise be labelled with a number it did not reach.
@@ -60,20 +62,23 @@ export function buildSteps(input: {
    * named it taught the operator to expect a dependency that is no longer there.
    */
   usesMac: boolean;
+  /** The base page exists. It is the gate, so its presence is its own step. */
+  hasBasePage: boolean;
 }): Step[] {
   const {
-    status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone, usesMac,
+    status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone, usesMac, hasBasePage,
   } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
 
   // `advance()` marks a campaign failed without rewinding its status, so the
   // step that broke is worked out from what actually made it into the database:
-  // a brief means the scrape and the summary both landed, and the pages are what
-  // was in flight.
+  // a brief means the scrape and the summary both landed, and whether a base
+  // page exists says which of the two writing steps was in flight.
   const failedAt = !failed ? -1
-    : hasBrief || personaCount > 0 ? 2
-      : ingestFailed ? 0 : 1;
+    : personaCount > 0 || hasBasePage ? 3
+      : hasBrief ? 2
+        : ingestFailed ? 0 : 1;
 
   const mark = (index: number, done: boolean, active: boolean): StepState => {
     if (failed) {
@@ -107,6 +112,19 @@ export function buildSteps(input: {
       state: mark(1, hasBrief || rank >= 2, ingestDone && !hasBrief && rank <= 1),
     },
     {
+      key: 'base',
+      title: 'Writing the main page, for you to approve',
+      detail: rank > 2 || (failed && failedAt > 2)
+        ? 'Approved. Seven of its ten reasons appear on every one of the twenty pages.'
+        : hasBasePage
+          ? 'Written and waiting. Read it below — seven of its ten reasons go onto all '
+            + `${PERSONA_TARGET} pages unchanged, so nothing else runs until you approve it.`
+          : 'One page written for the broadest buyer. It is the checkpoint: seven of its ten '
+            + `reasons are copied onto all ${PERSONA_TARGET} pages, so a mistake here is a `
+            + `mistake ${PERSONA_TARGET} times.`,
+      state: mark(2, rank >= 3, rank === 2),
+    },
+    {
       key: 'pages',
       title: `Writing ${PERSONA_TARGET} landing pages`,
       detail: personaCount > 0 && personaCount < PERSONA_TARGET
@@ -114,7 +132,7 @@ export function buildSteps(input: {
           + 'with their own headline and their own reasons to buy.'
         : 'One page per kind of buyer — the nervous first-timer, the gift buyer, the upgrader — '
           + 'each with its own headline and its own reasons.',
-      state: mark(2, rank >= 3, rank === 2),
+      state: mark(3, rank >= 4, rank === 3),
     },
     {
       key: 'scan',
