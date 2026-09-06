@@ -91,6 +91,19 @@ $$;
 
 grant execute on function public.get_public_page(text, text) to anon, authenticated;
 
+-- Every live persona URL, for generateStaticParams at build time. Slugs only —
+-- no campaign or persona content crosses this boundary.
+create or replace function public.list_public_paths()
+returns table ("campaignSlug" text, "personaSlug" text)
+language sql stable security definer set search_path = public as $$
+  select c.slug, p.slug
+  from public.personas p
+  join public.campaigns c on c.id = p.campaign_id
+  join public.base_pages b on b.campaign_id = c.id;
+$$;
+
+grant execute on function public.list_public_paths() to anon, authenticated;
+
 -- Counters. Separate from get_public_page so a bot prefetch of the HTML and a real
 -- CTA click are never the same event.
 create or replace function public.bump_persona_view(pid uuid)
