@@ -1,4 +1,5 @@
 import { serviceClient } from '@/lib/supabase';
+import { ingestProductFromServer } from '@/lib/ingest/cloud';
 import { buildProductBrief, buildProductBriefFromText } from './brief';
 import { buildBasePage } from './base-page';
 import { generatePersonaBatch, type ExistingPersona } from './personas';
@@ -64,32 +65,75 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
   const db = serviceClient();
 
   switch (campaign.status) {
-    // ── queue the scrape ────────────────────────────────────────────────
+    // ── read the product page ───────────────────────────────────────────
     case 'pending': {
       if (!campaign.source_url) {
-        // Pasted text needs no browser. Skip straight past the worker.
+        // Pasted text needs no page read at all.
         await db.from('campaigns').update({ status: 'scraping' }).eq('id', campaign.id);
         return {
           status: 'scraping', done: false, waiting: false, terminal: false,
-          did: 'No URL to scrape — reading the pasted product text instead.',
+          did: 'No URL to read — using the pasted product text instead.',
         };
       }
-      // An ingest job may already exist if a previous call crashed after the
-      // insert. Reuse it rather than queueing the same scrape twice.
+
+      // A Mac job may already be queued from an earlier call. Leave it alone
+      // rather than racing it with a second read of the same page.
       const { data: existing } = await db.from('scanner_jobs')
-        .select('id').eq('campaign_id', campaign.id).eq('kind', 'ingest')
+        .select('id, status').eq('campaign_id', campaign.id).eq('kind', 'ingest')
         .in('status', ['queued', 'running', 'completed']).maybeSingle();
 
-      if (!existing) {
-        const { error } = await db.from('scanner_jobs').insert({
-          campaign_id: campaign.id, kind: 'ingest', target_url: campaign.source_url,
-        });
-        if (error) return fail(campaign.id, `Could not queue the scrape: ${error.message}`);
+      if (existing) {
+        await db.from('campaigns').update({ status: 'scraping' }).eq('id', campaign.id);
+        return {
+          status: 'scraping', done: false, waiting: true, terminal: false,
+          did: 'This page is already with the Mac worker. Waiting on it.',
+        };
       }
+
+      // The normal path: read the page here, on the server. No browser, no Mac,
+      // about a second. Only the stores that refuse a plain fetch fall through.
+      let cloud;
+      try {
+        cloud = await ingestProductFromServer(campaign.source_url);
+      } catch (e) {
+        cloud = { payload: null, usable: false, reason: (e as Error).message };
+      }
+
+      if (cloud.usable && cloud.payload) {
+        const { error } = await db.from('campaigns').update({
+          // Merge: a re-run must not wipe a brief that already exists.
+          scraped_data: { ...(campaign.scraped_data ?? {}), raw: cloud.payload },
+          status: 'scraping',
+        }).eq('id', campaign.id);
+        if (error) return fail(campaign.id, `Could not save the page read: ${error.message}`);
+
+        const s = cloud.payload.structured as { product_name?: string } | null;
+        return {
+          status: 'scraping', done: false, waiting: false, terminal: false,
+          notes: cloud.payload.warnings,
+          did: `Read the product page: ${s?.product_name ?? cloud.payload.page_title} — `
+            + `${cloud.payload.reviews.length} customer reviews, `
+            + `source ${cloud.payload.structured_source ?? 'page text only'}.`,
+        };
+      }
+
+      // Falling back. The reason is written onto the job so the wizard can say
+      // WHY the Mac is involved, rather than just that it is.
+      const reason = cloud.reason ?? 'the server could not read the page';
+      const { error } = await db.from('scanner_jobs').insert({
+        campaign_id: campaign.id,
+        kind: 'ingest',
+        target_url: campaign.source_url,
+        notes: `server read failed, handed to the Mac: ${reason}`,
+      });
+      if (error) return fail(campaign.id, `Could not queue the scrape: ${error.message}`);
+
       await db.from('campaigns').update({ status: 'scraping' }).eq('id', campaign.id);
       return {
         status: 'scraping', done: false, waiting: true, terminal: false,
-        did: 'Queued the product scrape. It runs in Chrome on the Mac, so the Mac has to be awake.',
+        notes: [reason],
+        did: 'This store will not be read by a plain request, so it has been handed to '
+          + 'Chrome on the Mac. The Mac has to be awake for this one.',
       };
     }
 

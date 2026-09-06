@@ -179,10 +179,10 @@ function StepProduct({ draft, set, errors }: { draft: Draft; set: SetFn; errors:
       </Field>
 
       {draft.mode === 'url' ? (
-        <Callout tone="warn" title="Your Mac has to be awake for this bit">
-          The product page is read by a real Chrome window running on your Mac, because most
-          shops block anything else. If the worker is not running, the next screen waits and
-          tells you exactly what to type.
+        <Callout tone="info" title="What happens when you press Start">
+          We read the page ourselves, in about a second — you do not need to leave anything
+          running. A few shops refuse to be read that way; Amazon is one. If yours is one of
+          them the next screen says so and hands that page to Chrome on your Mac instead.
         </Callout>
       ) : null}
     </>

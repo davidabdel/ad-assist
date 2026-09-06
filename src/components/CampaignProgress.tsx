@@ -30,7 +30,7 @@ type Persona = {
   clicks_count: number;
 };
 
-type Job = { kind: string; status: string; error_message: string | null };
+type Job = { kind: string; status: string; error_message: string | null; notes: string | null };
 
 type CampaignView = {
   campaign: {
@@ -147,9 +147,11 @@ export function CampaignProgress({ id }: { id: string }) {
     personaCount: personas.length,
     hasSourceUrl: Boolean(campaign.source_url),
     ingestFailed: ingest?.status === 'failed',
-    // Pasted text never queues a job, so there is nothing to wait for and the
-    // reading step is complete the moment the campaign exists.
-    ingestDone: !campaign.source_url || ingest?.status === 'completed',
+    // Reading is finished once the campaign is off `pending` and no Mac job is
+    // still outstanding. A job only exists at all when the server could not read
+    // the page, so the usual case is "no job, and the read already happened".
+    ingestDone: campaign.status !== 'pending' && !waitingOnMac,
+    usesMac: Boolean(ingest),
   });
 
   return (
@@ -171,10 +173,17 @@ export function CampaignProgress({ id }: { id: string }) {
 
       {waitingOnMac ? (
         <div className="mb-6">
-          <Callout tone="warn" title="Waiting for your Mac">
+          <Callout tone="warn" title="This shop needs your Mac">
             <p>
-              Reading your product page needs the worker running on your machine. Open Terminal
-              and paste this, then leave the window open:
+              {/* The job carries the reason the server could not read it. Showing it
+                  is the difference between "something went wrong" and "this shop
+                  blocks robots, which is normal and expected". */}
+              {ingest?.notes?.replace(/^server read failed, handed to the Mac: /, '')
+                ?? 'The page could not be read from the server.'}
+            </p>
+            <p className="mt-2">
+              Almost every shop is read without it, but this one has to be opened in a real
+              browser. Open Terminal, paste this, and leave the window open:
             </p>
             <pre className="mt-2 overflow-x-auto rounded-md bg-amber-100 px-3 py-2 font-mono text-xs">
               cd ~/.buzz/REPOS/ad-assist/scanner &amp;&amp; npm start

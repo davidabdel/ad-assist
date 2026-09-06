@@ -54,8 +54,16 @@ export function buildSteps(input: {
    * and the screen claims to be doing two things it is not.
    */
   ingestDone: boolean;
+  /**
+   * This page fell back to Chrome on the Mac. Almost none do, so the step only
+   * mentions the Mac when the Mac is genuinely involved — a screen that always
+   * named it taught the operator to expect a dependency that is no longer there.
+   */
+  usesMac: boolean;
 }): Step[] {
-  const { status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone } = input;
+  const {
+    status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone, usesMac,
+  } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
 
@@ -80,10 +88,15 @@ export function buildSteps(input: {
     {
       key: 'read',
       title: hasSourceUrl ? 'Reading your product page' : 'Reading what you typed',
-      detail: hasSourceUrl
-        ? 'A real Chrome window on your Mac opens the page and pulls out the price, the '
-          + 'features and the customer reviews.'
-        : 'Taking your description as the source instead of a web page.',
+      detail: !hasSourceUrl
+        ? 'Taking your description as the source instead of a web page.'
+        : usesMac
+          ? 'This shop refuses to be read by anything but a browser, so a real Chrome '
+            + 'window on your Mac is opening the page and pulling out the price, the '
+            + 'features and the customer reviews.'
+          : 'Pulling the price, the features, the photos and the customer reviews '
+            + 'straight off the page. Takes about a second and needs nothing running '
+            + 'on your machine.',
       state: mark(0, ingestDone || hasBrief || rank >= 2, !ingestDone && rank <= 1),
     },
     {
