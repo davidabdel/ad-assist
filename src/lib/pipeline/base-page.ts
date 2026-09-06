@@ -1,4 +1,4 @@
-import { generate } from '@/lib/anthropic';
+import { generate } from '@/lib/llm';
 import { BasePageSchema, type BasePage, type ProductBrief } from './schemas';
 
 /**

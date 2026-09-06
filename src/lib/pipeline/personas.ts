@@ -1,4 +1,4 @@
-import { generate } from '@/lib/anthropic';
+import { generate } from '@/lib/llm';
 import { normalisePainPoint, uniqueSlug } from '@/lib/slug';
 import { PersonaBatchSchema, type BasePage, type PersonaDraft, type ProductBrief } from './schemas';
 

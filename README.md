@@ -24,7 +24,7 @@ looking stuck.
 ## Running it
 
 ```bash
-cp .env.example .env.local     # fill in Supabase, Anthropic, KIE
+cp .env.example .env.local     # fill in Supabase, OpenAI, KIE
 npm install && npm run dev     # app on :3000
 
 cd scanner && npm install
@@ -84,5 +84,5 @@ a human).
 - **`claim_job`, `record_spend` and `reap_stale_jobs` are service-role only.**
   They are `security definer`, so they bypass RLS by design — the grant is the
   only gate, and the anon key ships in the browser on every `/p/` page.
-- **`AD_ASSIST_MODEL`, not `ANTHROPIC_MODEL`.** Agent harnesses export the latter
+- **`AD_ASSIST_MODEL`, not `OPENAI_MODEL`.** Agent harnesses export the latter
   with internal aliases the public API rejects.
