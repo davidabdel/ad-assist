@@ -1,4 +1,11 @@
-import { JSDOM } from 'jsdom';
+// linkedom, not jsdom, and the reason is production-only: Next treats jsdom as an
+// external package, so the serverless function `require()`s it — and jsdom now
+// pulls in an ESM-only encoding sniffer, which cannot be required. The build is
+// clean and the route 500s with "Failed to load external module jsdom". linkedom
+// gets bundled instead, so no require() of ESM happens, and it gives Readability
+// and the selectors below the same DOM surface. The Mac worker keeps jsdom: it
+// runs on plain Node, where none of this applies.
+import { parseHTML } from 'linkedom';
 import {
   dedupeReviews,
   extractAmazon,
@@ -146,8 +153,7 @@ export async function ingestProductFromServer(url: string): Promise<CloudIngestR
     };
   }
 
-  const dom = new JSDOM(html, { url: res.url });
-  const { document } = dom.window;
+  const { document } = parseHTML(html);
 
   const shopify = await fetchShopifyProduct(url) ?? extractAmazon(document, url);
   const ld = extractJsonLdProduct(jsonLdScripts(document));
