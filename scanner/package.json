@@ -1,0 +1,19 @@
+{
+  "name": "ad-assist-scanner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Chrome worker for Ad Assist. Runs on David's Mac: product ingest + Meta Ad Library scans.",
+  "scripts": {
+    "start": "node src/worker.js",
+    "ingest": "node src/cli-ingest.js"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@supabase/supabase-js": "^2.115.0",
+    "dotenv": "^17.4.2",
+    "jsdom": "^30.0.1",
+    "puppeteer-core": "^25.10.0",
+    "turndown": "^7.2.4"
+  }
+}
