@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ad Assist
 
-## Getting Started
+One product URL in → 20 buyer personas → 20 live listicle landing pages → a Meta
+Ad Library scan for winning formats → 60 ad ideas in an approval table → KIE
+generates only the rows you approve.
 
-First, run the development server:
+Nothing bills until you click Approve.
+
+## It runs in two halves
+
+**Vercel + Supabase** serves the dashboard and the 20 public `/p/` pages. Those
+have to be reachable 24/7 or Meta ad review rejects the destination.
+
+**A Node worker on David's Mac** does everything that needs a real browser:
+scraping the product page, and scanning the Meta Ad Library. Meta and most
+storefronts do not cooperate with a headless fetch, and there is no Apify.
+
+The two halves talk **only** through the `scanner_jobs` table. There is no
+inbound connection to the Mac — the worker polls, claims a row with
+`FOR UPDATE SKIP LOCKED`, and writes results back. Consequence worth knowing:
+**a campaign cannot start while the Mac is asleep.** The UI says so rather than
+looking stuck.
+
+## Running it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local     # fill in Supabase, Anthropic, KIE
+npm install && npm run dev     # app on :3000
+
+cd scanner && npm install
+npm start                      # worker; opens a real Chrome window
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Apply the database schema (no `supabase` CLI or `psql` needed — this goes
+through the Management API):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+./scripts/db-apply.sh                                    # all migrations
+./scripts/db-apply.sh supabase/migrations/0005_*.sql     # just one
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Prove the whole pipeline actually runs, end to end, against the live database
+and the live model — this one **spends money**:
 
-## Learn More
+```bash
+./scripts/smoke-pipeline.sh            # scrape → brief → base page → 20 personas
+./scripts/smoke-pipeline.sh --cleanup  # delete the throwaway owner and its rows
+```
 
-To learn more about Next.js, take a look at the following resources:
+## The pipeline
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Each `POST /api/campaigns/{id}/advance` does **one unit of work** and returns.
+A dashboard polls it. The unit is small on purpose: the full run is several
+minutes of model time, which is longer than a serverless function may live, so
+splitting it means the work survives a timeout, a deploy, or a closed laptop.
+There is no in-memory progress — `campaigns.status` plus the rows that exist
+**is** the progress, and every unit is idempotent.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Status | What the next `advance` does |
+|---|---|
+| `pending` | Queues the ingest job |
+| `scraping` | Waits for the worker, then writes the product brief |
+| `personas` | Writes the base page, then 5 personas per call until there are 20 |
+| `pages_built` | Done — 20 URLs are live. The ad scan is the next stage |
 
-## Deploy on Vercel
+The response carries `waiting` (the next move belongs to the worker — back off)
+and `terminal` (calling again changes nothing — finished, or failed and needing
+a human).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Things that are true and are easy to get wrong
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **The base page is written before the personas.** A persona overrides reasons
+  1–3 of it, and reasons 4–10 have to hold for all twenty buyers — which is only
+  true if they were written once for the product.
+- **Persona diversity is enforced in code, not hoped for in the prompt.** A
+  persona whose pain point normalises to one already taken is dropped and
+  re-requested. After three fully-duplicate batches the campaign stops rather
+  than ships near-identical pages.
+- **A testimonial is never written.** Quotes are verbatim from the scrape or the
+  field is left empty. Same for the brief: what the source did not say goes in
+  `gaps`, it does not get filled in.
+- **Raw competitor ad copy never reaches a copywriting prompt.** Scanned ads are
+  stored for browsing; only extracted *structure* travels forward.
+- **`claim_job`, `record_spend` and `reap_stale_jobs` are service-role only.**
+  They are `security definer`, so they bypass RLS by design — the grant is the
+  only gate, and the anon key ships in the browser on every `/p/` page.
+- **`AD_ASSIST_MODEL`, not `ANTHROPIC_MODEL`.** Agent harnesses export the latter
+  with internal aliases the public API rejects.
