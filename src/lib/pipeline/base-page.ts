@@ -1,4 +1,5 @@
 import { generate } from '@/lib/llm';
+import { COPY_RULES, type ProductType } from '@/lib/product-type';
 import { BasePageSchema, type BasePage, type ProductBrief } from './schemas';
 
 /**
@@ -12,17 +13,17 @@ import { BasePageSchema, type BasePage, type ProductBrief } from './schemas';
  */
 
 const SYSTEM = `You are a direct-response copywriter who writes listicle landing pages
-for e-commerce products advertised on Meta.
+for things advertised on Meta.
 
-You are writing the BASE page. Twenty different buyer personas will each get
+You are writing the BASE page. Several different buyer personas will each get
 their own version of it, and each persona replaces only the first three reasons.
 So:
 
 - Reasons 1-3 are placeholders that will be swapped out. Write them for the
   broadest, most common buyer.
-- Reasons 4-10 are LOCKED. They appear on all twenty pages unchanged, so every
-  one of them must be true and compelling regardless of who is reading. A reason
-  that only lands for one kind of buyer belongs in a persona, not here.
+- Reasons 4-10 are LOCKED. They appear on every one of those pages unchanged, so
+  every one of them must be true and compelling regardless of who is reading. A
+  reason that only lands for one kind of buyer belongs in a persona, not here.
 
 RULES
 - Exactly 10 reasons, numbered 1 to 10, ordered strongest first.
@@ -47,20 +48,22 @@ RULES
  */
 export async function buildBasePage(
   brief: ProductBrief,
+  productType: ProductType = 'ecom',
   guidance?: string | null,
 ): Promise<{ page: BasePage; usage: { input: number; output: number } }> {
   const note = guidance?.trim();
+  const rules = COPY_RULES[productType];
   const { data, usage } = await generate({
-    system: SYSTEM,
+    system: rules ? `${SYSTEM}\n\n${rules}` : SYSTEM,
     cachedContext: `PRODUCT BRIEF\n---\n${JSON.stringify(brief, null, 2)}\n---`,
     prompt: note
-      ? 'Write the base listicle page for this product. A previous attempt was '
+      ? 'Write the base listicle page for this. A previous attempt was '
         + `rejected. What the operator asked to be different:\n\n${note}\n\n`
         + 'Address that specifically. Every rule above still applies — in particular, '
         + 'do not invent a feature, a testimonial or an offer to satisfy the request. '
         + 'If what was asked for is not supported by the brief, write the closest thing '
         + 'that is true.'
-      : 'Write the base listicle page for this product.',
+      : 'Write the base listicle page for this.',
     schema: BasePageSchema,
     maxTokens: 16000,
   });

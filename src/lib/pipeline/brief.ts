@@ -1,4 +1,5 @@
 import { generate } from '@/lib/llm';
+import { BRIEF_RULES, type ProductType } from '@/lib/product-type';
 import { ProductBriefSchema, type ProductBrief } from './schemas';
 
 /**
@@ -13,7 +14,7 @@ const SYSTEM = `You convert a raw web scrape of a single product into a structur
 
 You are an extractor, not a copywriter. Every field must be traceable to the
 source below. This brief is the ONLY thing the rest of the pipeline sees, so
-anything you invent here is repeated across twenty landing pages and sixty ads.
+anything you invent here is repeated across every landing page and every ad.
 
 RULES
 - Never invent a feature, a price, a rating or a review. If the source does not
@@ -40,9 +41,15 @@ function payloadForPrompt(raw: Record<string, unknown>): string {
   return JSON.stringify(clone, null, 2);
 }
 
+export type BriefExtra = {
+  productType?: ProductType;
+  checkoutUrl?: string | null;
+  currentOffer?: string | null;
+};
+
 export async function buildProductBrief(
   scraped: Record<string, unknown>,
-  extra: { checkoutUrl?: string | null; currentOffer?: string | null } = {},
+  extra: BriefExtra = {},
 ): Promise<{ brief: ProductBrief; usage: { input: number; output: number } }> {
   const context = [
     payloadForPrompt(scraped),
@@ -50,8 +57,12 @@ export async function buildProductBrief(
     extra.checkoutUrl ? `\nCheckout URL: ${extra.checkoutUrl}` : '',
   ].join('\n');
 
+  // Appended rather than folded in, so the rules that hold for everything stay
+  // in one readable block and the per-kind rules are visibly additions to it.
+  const rules = BRIEF_RULES[extra.productType ?? 'ecom'];
+
   const { data, usage } = await generate({
-    system: SYSTEM,
+    system: rules ? `${SYSTEM}\n\n${rules}` : SYSTEM,
     cachedContext: `SOURCE SCRAPE\n---\n${context}\n---`,
     prompt: 'Produce the product brief from the source above.',
     schema: ProductBriefSchema,
@@ -66,7 +77,7 @@ export async function buildProductBrief(
 /** Same shape, built by hand when the operator pasted text instead of a URL. */
 export async function buildProductBriefFromText(
   text: string,
-  extra: { checkoutUrl?: string | null; currentOffer?: string | null } = {},
+  extra: BriefExtra = {},
 ): Promise<{ brief: ProductBrief; usage: { input: number; output: number } }> {
   return buildProductBrief(
     {

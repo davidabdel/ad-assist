@@ -7,7 +7,7 @@ import { useSession } from '@/components/Session';
 import {
   Button, Callout, Card, CopyButton, Field, Shell, inputClass,
 } from '@/components/ui';
-import { buildSteps, PERSONA_TARGET, type Step, type StepState } from '@/lib/campaign-steps';
+import { buildSteps, DEFAULT_PERSONA_TARGET, type Step, type StepState } from '@/lib/campaign-steps';
 
 /**
  * Watches one campaign and drives it.
@@ -73,6 +73,9 @@ type CampaignView = {
     id: string; title: string; slug: string; status: string;
     source_url: string | null; error_message: string | null; has_brief: boolean;
     base_page_guidance: string | null;
+    /** How many pages this one is writing — five for a vehicle, twenty otherwise. */
+    persona_target: number | null;
+    contact_phone: string | null;
   };
   base_page: BasePageView | null;
   /** Chosen photos. Empty until the picture stage runs, which is after approval. */
@@ -81,6 +84,19 @@ type CampaignView = {
   brief: { image_urls?: string[] } | null;
   personas: Persona[];
   jobs: Job[];
+  /** Enquiries from the public pages. Only ever non-empty on a phone-and-form campaign. */
+  leads: Lead[];
+};
+
+type Lead = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  message: string | null;
+  created_at: string;
+  /** Which of the pages they were reading. Null if that page has since gone. */
+  persona_name: string | null;
 };
 
 type AdvanceResult = {
@@ -190,7 +206,8 @@ export function CampaignProgress({ id }: { id: string }) {
     );
   }
 
-  const { campaign, personas, jobs, base_page: basePage, images, brief } = view;
+  const { campaign, personas, jobs, base_page: basePage, images, brief, leads } = view;
+  const target = campaign.persona_target ?? DEFAULT_PERSONA_TARGET;
   const foundPhotos = brief?.image_urls ?? [];
   const failed = campaign.status === 'failed';
   const finished = campaign.status === 'pages_built';
@@ -206,6 +223,7 @@ export function CampaignProgress({ id }: { id: string }) {
     hasBrief: campaign.has_brief,
     hasBasePage: Boolean(basePage),
     personaCount: personas.length,
+    personaTarget: target,
     hasSourceUrl: Boolean(campaign.source_url),
     ingestFailed: ingest?.status === 'failed',
     // Reading is finished once the campaign is off `pending` and no Mac job is
@@ -303,13 +321,18 @@ export function CampaignProgress({ id }: { id: string }) {
         <BasePageReview
           page={basePage}
           slug={campaign.slug}
+          target={target}
           lastGuidance={campaign.base_page_guidance}
           foundPhotos={foundPhotos}
           onDecide={decideBasePage}
         />
       ) : null}
 
-      {finished ? <LivePages campaign={campaign} personas={personas} /> : null}
+      {/* Above the page list on purpose: once a vehicle campaign is live, the
+          enquiries are the only thing on this screen worth opening it for. */}
+      {leads.length ? <Leads leads={leads} /> : null}
+
+      {finished ? <LivePages campaign={campaign} personas={personas} target={target} /> : null}
 
       {log.length ? (
         <details className="mt-6">
@@ -372,10 +395,12 @@ function Bullet({ state, spinning }: { state: StepState; spinning: boolean }) {
  * approved, so they have to be readable without leaving the screen.
  */
 function BasePageReview({
-  page, slug, lastGuidance, foundPhotos, onDecide,
+  page, slug, target, lastGuidance, foundPhotos, onDecide,
 }: {
   page: BasePageView;
   slug: string;
+  /** How many pages this campaign is writing. Five for a vehicle. */
+  target: number;
   lastGuidance: string | null;
   foundPhotos: string[];
   onDecide: (action: 'approve' | 'rewrite', guidance?: string) => Promise<void>;
@@ -399,11 +424,11 @@ function BasePageReview({
   return (
     <div className="mt-6">
       <Card>
-        <h2 className="text-xl font-bold tracking-tight">Read this before the {PERSONA_TARGET}</h2>
+        <h2 className="text-xl font-bold tracking-tight">Read this before the {target}</h2>
         <p className="mt-1 text-sm leading-6 text-zinc-500">
-          Reasons 4 to 10 below are copied onto every one of the {PERSONA_TARGET} pages,
+          Reasons 4 to 10 below are copied onto every one of the {target} pages,
           word for word. Only the headline and reasons 1 to 3 change per buyer. So if
-          something here is wrong, it is wrong {PERSONA_TARGET} times — this is the cheap
+          something here is wrong, it is wrong {target} times — this is the cheap
           place to catch it.
         </p>
 
@@ -416,7 +441,7 @@ function BasePageReview({
         {!testimonials.length ? (
           <div className="mt-4">
             <Callout tone="warn" title="No customer reviews were found">
-              Every one of the {PERSONA_TARGET} pages will ship with no proof section. If the
+              Every one of the {target} pages will ship with no proof section. If the
               product page has reviews on it, send this back, then point the campaign at that
               page rather than the home page.
             </Callout>
@@ -451,7 +476,7 @@ function BasePageReview({
             </Callout>
           ) : (
             <Callout tone="warn" title="No photos were found on your page">
-              All {PERSONA_TARGET} pages will be text only. Nothing here invents a picture, so
+              All {target} pages will be text only. Nothing here invents a picture, so
               if the pages need images, point the campaign at a page that has product photos
               on it.
             </Callout>
@@ -561,7 +586,7 @@ function BasePageReview({
             <Button onClick={() => run('approve')} disabled={busy !== null}>
               {busy === 'approve'
                 ? 'Starting the pages…'
-                : `Approve and write the ${PERSONA_TARGET} pages`}
+                : `Approve and write the ${target} pages`}
             </Button>
             <Button variant="ghost" onClick={() => run('rewrite')} disabled={busy !== null}>
               {busy === 'rewrite' ? 'Writing it again…' : 'Send it back'}
@@ -577,7 +602,7 @@ function BasePageReview({
           </div>
           <p className="mt-3 text-xs text-zinc-400">
             Sending it back throws this version away and writes a new one. Nothing else has been
-            written yet, so it costs one page, not {PERSONA_TARGET}.
+            written yet, so it costs one page, not {target}.
           </p>
         </div>
       </Card>
@@ -585,9 +610,50 @@ function BasePageReview({
   );
 }
 
+function Leads({ leads }: { leads: Lead[] }) {
+  return (
+    <div className="mt-6">
+      <Card>
+        <h2 className="text-xl font-bold tracking-tight">
+          {leads.length} enquir{leads.length === 1 ? 'y' : 'ies'}
+        </h2>
+        <p className="mt-1 text-sm text-zinc-500">
+          From the form on the live pages. The page each one was reading is named, because
+          that is what tells you which angle is doing the work.
+        </p>
+
+        <ul className="mt-6 divide-y divide-zinc-200 border-t border-zinc-200">
+          {leads.map((l) => (
+            <li key={l.id} className="py-4">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <p className="font-semibold text-zinc-900">{l.name}</p>
+                <a href={`tel:${l.phone.replace(/[^\d+]/g, '')}`} className="text-zinc-700 underline">
+                  {l.phone}
+                </a>
+                {l.email ? <span className="text-sm text-zinc-500">{l.email}</span> : null}
+                <span className="ml-auto text-xs text-zinc-400">
+                  {new Date(l.created_at).toLocaleString()}
+                </span>
+              </div>
+              {l.message ? (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
+                  {l.message}
+                </p>
+              ) : null}
+              <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                {l.persona_name ?? 'the main page'}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
 function LivePages({
-  campaign, personas,
-}: { campaign: { slug: string }; personas: Persona[] }) {
+  campaign, personas, target,
+}: { campaign: { slug: string }; personas: Persona[]; target: number }) {
   const allLinks = personas.map((p) => p.url).join('\n');
   return (
     <div className="mt-6">
@@ -626,11 +692,11 @@ function LivePages({
           ))}
         </ul>
 
-        {personas.length < PERSONA_TARGET ? (
+        {personas.length < target ? (
           <div className="mt-6">
             <Callout tone="warn">
-              {personas.length} pages, not {PERSONA_TARGET}. The run stopped early rather than
-              ship near-identical pages — the product may not support {PERSONA_TARGET} genuinely
+              {personas.length} pages, not {target}. The run stopped early rather than
+              ship near-identical pages — it may not support {target} genuinely
               different buyers.
             </Callout>
           </div>

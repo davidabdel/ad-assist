@@ -64,7 +64,7 @@ export async function POST(
 
       return Response.json({
         status: 'images',
-        did: 'Main page approved. Choosing photos for it, then writing the twenty pages.',
+        did: `Main page approved. Choosing photos for it, then writing the ${campaign.persona_target ?? 20} pages.`,
       });
     }
 

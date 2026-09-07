@@ -1,15 +1,17 @@
 import { generate } from '@/lib/llm';
 import { ImagePlanSchema, type ImagePlan, type ProductBrief } from './schemas';
+import { asDataUrl } from './image-bytes';
 import type { Reason } from '@/lib/page-data';
 
 /**
  * Stage 2c — pictures, after the words are approved.
  *
  * THE PHOTOS ARE THE CUSTOMER'S OWN. Nothing here generates an image and
- * nothing here pays for one. The ingest already read every photograph off the
- * source page into `brief.image_urls`; this stage looks at them, writes down
- * what each one shows, and puts them against the reasons they genuinely
- * illustrate. That constraint is not a cost saving, it is the accuracy
+ * nothing here pays for one. They arrive from two places — every photograph the
+ * ingest read off the source page into `brief.image_urls`, and anything the
+ * operator uploaded themselves, which for a vehicle is the entire library. This
+ * stage looks at them, writes down what each one shows, and puts them against
+ * the reasons they genuinely illustrate. That constraint is not a cost saving, it is the accuracy
  * argument: a generated photograph of somebody else's product on somebody
  * else's page is a misrepresentation, and these pages are ad destinations.
  *
@@ -31,79 +33,14 @@ import type { Reason } from '@/lib/page-data';
  */
 const MAX_IMAGES = 24;
 
-/**
- * Well above a product photo and well below anything that would make the
- * request unwieldy. A URL that serves more than this is not a product photo.
- */
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-
-/**
- * WE FETCH THE PHOTOS OURSELVES RATHER THAN HANDING OVER URLs.
- *
- * The first live run failed on exactly that: the model was given the seller's
- * own image URLs and came back `400 Unable to download content from the
- * provided URL before the timeout`. Those URLs were fine — curl pulls them in
- * 40ms — but they are behind a CDN that refuses some clients (python-urllib
- * gets a bare 403) and they carry a second unencoded `https://` inside the
- * path, which is enough to defeat a fetcher that normalises URLs.
- *
- * Neither of those is fixable from here, and both will recur: every campaign
- * points at somebody else's CDN. Reading the bytes on our own server and
- * sending them inline removes the third party from the loop entirely, and it
- * is the same fetch, with the same browser headers, that already reads the
- * product page.
- */
-const IMAGE_HEADERS: Record<string, string> = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
-    + '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
-  Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-  'Accept-Language': 'en-AU,en;q=0.9',
-  'Sec-Fetch-Dest': 'image',
-  'Sec-Fetch-Mode': 'no-cors',
-  'Sec-Fetch-Site': 'cross-site',
-};
-
-async function asDataUrl(url: string): Promise<string | null> {
-  try {
-    const res = await fetch(url, {
-      headers: IMAGE_HEADERS,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return null;
-
-    const type = (res.headers.get('content-type') ?? '').split(';')[0].trim();
-    // The four the API accepts. A CDN that returns `application/octet-stream`
-    // for a webp is common enough to be worth the sniff below rather than a
-    // rejection.
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
-
-    const mime = /^image\/(png|jpeg|webp|gif)$/.test(type) ? type : sniff(buf);
-    return mime ? `data:${mime};base64,${buf.toString('base64')}` : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Magic bytes, for the CDNs that mislabel what they serve. */
-function sniff(buf: Buffer): string | null {
-  if (buf.length < 12) return null;
-  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
-  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
-  if (buf.subarray(0, 3).toString('latin1') === 'GIF') return 'image/gif';
-  if (buf.subarray(0, 4).toString('latin1') === 'RIFF'
-    && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
-  return null;
-}
-
 const SYSTEM = `You are an art director choosing photographs for a listicle
-landing page. Every photograph you are shown was taken off the seller's own
-website, so it is the real product and the real brand.
+landing page. Every photograph you are shown came from the seller — read off
+their own website, or uploaded by them — so it is the real thing and the real
+brand. None of them was generated.
 
 You do two things in one pass.
 
-FIRST, caption every image. The stage that writes the twenty buyer-specific
+FIRST, caption every image. The stage that writes the buyer-specific
 pages is a text-only call — it will never see these pictures, and your caption
 is the only thing it will have to choose from. Write what is actually in the
 frame: the object, the setting, who is in it and what they are doing.

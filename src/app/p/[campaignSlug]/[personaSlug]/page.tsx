@@ -30,6 +30,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     // These pages exist to be landed on from a paid ad, not to rank. Indexing
     // 20 near-identical pages is a thin-content problem we do not need.
     robots: { index: false, follow: false },
+    // The seller's own tab icon, not ours. Set here rather than as a <link> in
+    // the component so it replaces the app favicon instead of competing with it.
+    ...(page.brand?.icon_url ? { icons: { icon: page.brand.icon_url } } : {}),
   };
 }
 

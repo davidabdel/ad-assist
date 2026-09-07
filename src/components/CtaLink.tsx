@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 /**
  * Counts the click, then leaves. sendBeacon rather than await-then-navigate:
@@ -8,11 +8,13 @@ import type { ReactNode } from 'react';
  * loading, and a beacon survives the page unload that follows.
  */
 export function CtaLink({
-  href, personaId, className, children,
+  href, personaId, className, style, children,
 }: {
   href: string;
   personaId: string | null;
   className?: string;
+  /** The brand's button colours. Inline because they are per-campaign values. */
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   function onClick() {
@@ -28,7 +30,7 @@ export function CtaLink({
   }
 
   return (
-    <a href={href} onClick={onClick} className={className} rel="noopener">
+    <a href={href} onClick={onClick} className={className} style={style} rel="noopener">
       {children}
     </a>
   );

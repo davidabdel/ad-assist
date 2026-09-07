@@ -44,6 +44,14 @@ const SAMPLE: PublicPage = {
     'Real product and price, read from the live store by the ingest worker. The button points at the checkout URL entered when the campaign was created.',
   cta_button_text: 'Shop the Tree Runner',
   cta_url: 'https://www.allbirds.com.au/products/tree-runner-mens-navy-night-white-sole',
+  // Null renders the neutral editorial theme, which is what this preview is
+  // for: judging the layout itself rather than one seller's paint job.
+  brand: null,
+  // A physical product, so the page ends in a checkout link. Swap this to
+  // 'vehicle' with a number beside it to see the tap-to-call and the enquiry
+  // form instead — that is the whole of the difference in the renderer.
+  product_type: 'ecom',
+  contact_phone: null,
 };
 
 export default function PreviewPage() {

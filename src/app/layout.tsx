@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Ad Assist",
-  description: "One product in, twenty landing pages out.",
+  description: "One thing to sell in, a landing page per buyer out.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

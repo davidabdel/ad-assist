@@ -11,7 +11,7 @@ import { Home } from '@/components/Home';
  */
 export const metadata = {
   title: 'Ad Assist',
-  description: 'One product in, twenty landing pages out.',
+  description: 'One thing to sell in, a landing page per buyer out.',
 };
 
 export default function Page() {

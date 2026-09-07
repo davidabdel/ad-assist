@@ -95,10 +95,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const token = data.session?.access_token;
     if (!token) throw new Error('Your sign-in expired. Sign in again.');
 
+    // Never on a FormData body: the browser has to set its own multipart
+    // boundary, and a hard-coded application/json makes the server read an
+    // upload as a malformed JSON document.
+    const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
+
     const res = await fetch(path, {
       ...init,
       headers: {
-        'Content-Type': 'application/json',
+        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
         Authorization: `Bearer ${token}`,
         ...(init?.headers ?? {}),
       },

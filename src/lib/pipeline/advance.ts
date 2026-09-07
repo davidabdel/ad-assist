@@ -1,7 +1,11 @@
 import { serviceClient } from '@/lib/supabase';
 import { ingestProductFromServer } from '@/lib/ingest/cloud';
+import { ingestPdfFromUrl } from '@/lib/ingest/pdf';
+import { spec, type ProductType } from '@/lib/product-type';
 import { buildProductBrief, buildProductBriefFromText } from './brief';
 import { buildBasePage } from './base-page';
+import { readBrand } from './brand';
+import type { BrandKit } from '@/lib/brand';
 import {
   applyImages, libraryForPrompt, planImages, resolveImages,
 } from './images';
@@ -24,7 +28,16 @@ import type { Reason } from '@/lib/page-data';
  * either does the same unit again harmlessly or reports "waiting".
  */
 
-const PERSONA_TARGET = 20;
+/**
+ * How many pages a campaign gets is a property of what is being sold and is
+ * frozen onto the row at creation (see `lib/product-type.ts`): twenty for
+ * anything with unlimited supply, five for one specific vehicle. Read from the
+ * campaign rather than from the table so a campaign halfway through writing its
+ * pages cannot change target under itself.
+ */
+function personaTarget(campaign: CampaignRow): number {
+  return campaign.persona_target ?? 20;
+}
 const PERSONA_BATCH = 5;
 /** A batch can come back entirely duplicated. Retry, then stop rather than spin. */
 const MAX_EMPTY_BATCHES = 3;
@@ -56,14 +69,40 @@ type CampaignRow = {
   id: string;
   user_id: string;
   slug: string;
+  product_type: ProductType;
+  persona_target: number;
   source_url: string | null;
   raw_input_text: string | null;
+  /** The ebook itself, in storage. Read instead of a page. */
+  source_file_url: string | null;
+  /** The operator's own photographs. On a vehicle these are the only ones. */
+  uploaded_image_urls: string[] | null;
   checkout_url: string | null;
+  contact_phone: string | null;
+  contact_name: string | null;
   current_offer: string | null;
   status: string;
   base_page_guidance: string | null;
   scraped_data: { raw?: Record<string, unknown>; brief?: ProductBrief } | null;
+  brand: BrandKit | null;
 };
+
+/**
+ * Where the page's button sends people.
+ *
+ * A vehicle has no cart. There is one of it, and the buyer rings — so the
+ * button is a tel: link and the enquiry form underneath it is the other half.
+ * `tel:` is stripped of everything a dialler cannot use, because a number typed
+ * as "0412 345 678 (after 6pm)" makes a link that fails silently on a phone,
+ * which is the one device that matters here.
+ */
+function ctaUrlFor(campaign: CampaignRow): string {
+  if (spec(campaign.product_type).ctaKind === 'contact') {
+    const dialable = (campaign.contact_phone ?? '').replace(/[^\d+]/g, '');
+    return dialable ? `tel:${dialable}` : '#enquire';
+  }
+  return campaign.checkout_url || campaign.source_url || '#';
+}
 
 async function fail(id: string, message: string): Promise<AdvanceResult> {
   await serviceClient().from('campaigns')
@@ -77,12 +116,39 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
   switch (campaign.status) {
     // ── read the product page ───────────────────────────────────────────
     case 'pending': {
+      // An ebook's source is the file, not a page. Read here on the server:
+      // it is one download and one text extraction, no browser, no Mac.
+      if (campaign.source_file_url && !campaign.scraped_data?.raw) {
+        const pdf = await ingestPdfFromUrl(campaign.source_file_url);
+        if (!pdf.usable || !pdf.payload) {
+          // No silent fallback to the Mac: Chrome cannot read a PDF's text
+          // either, so handing it over would only move the same failure
+          // somewhere the operator cannot see it.
+          return fail(campaign.id, `The ebook could not be read — ${pdf.reason}`);
+        }
+        const { error } = await db.from('campaigns').update({
+          scraped_data: { ...(campaign.scraped_data ?? {}), raw: pdf.payload },
+          status: 'scraping',
+        }).eq('id', campaign.id);
+        if (error) return fail(campaign.id, `Could not save the ebook read: ${error.message}`);
+
+        return {
+          status: 'scraping', done: false, waiting: false, terminal: false,
+          notes: pdf.payload.warnings as string[],
+          did: `Read the ebook: ${pdf.payload.page_count} pages, `
+            + `${(pdf.payload.markdown as string).length.toLocaleString()} characters of text.`,
+        };
+      }
+
       if (!campaign.source_url) {
-        // Pasted text needs no page read at all.
+        // Pasted text needs no page read at all, and an already-read file needs
+        // no second one.
         await db.from('campaigns').update({ status: 'scraping' }).eq('id', campaign.id);
         return {
           status: 'scraping', done: false, waiting: false, terminal: false,
-          did: 'No URL to read — using the pasted product text instead.',
+          did: campaign.scraped_data?.raw
+            ? 'The file has already been read. Moving on to the brief.'
+            : 'No URL to read — using the pasted description instead.',
         };
       }
 
@@ -181,21 +247,50 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       let notes: string[] = [];
       try {
         const raw = campaign.scraped_data?.raw;
+        const extra = {
+          productType: campaign.product_type,
+          checkoutUrl: campaign.checkout_url,
+          currentOffer: campaign.current_offer,
+        };
         const result = raw
-          ? await buildProductBrief(raw, {
-            checkoutUrl: campaign.checkout_url, currentOffer: campaign.current_offer,
-          })
-          : await buildProductBriefFromText(campaign.raw_input_text ?? '', {
-            checkoutUrl: campaign.checkout_url, currentOffer: campaign.current_offer,
-          });
+          ? await buildProductBrief(raw, extra)
+          : await buildProductBriefFromText(campaign.raw_input_text ?? '', extra);
         brief = result.brief;
         notes = brief.gaps ?? [];
       } catch (e) {
         return fail(campaign.id, `Could not build the product brief: ${(e as Error).message}`);
       }
 
+      // ── the brand, in the same unit as the brief ───────────────────
+      // Before the base page is written, not after: the operator has to review
+      // the words wearing the clothes the buyer will see them in. Approving a
+      // grey page and discovering the paint afterwards is a second review.
+      //
+      // In this unit rather than its own status because it is one fetch and one
+      // small call — a stage of its own would cost an enum value, a migration
+      // and a round trip to save nothing. It cannot fail the campaign: readBrand
+      // returns the neutral kit for every failure it has, and the pages render
+      // exactly as they did before this existed.
+      let brandNote: string | null = null;
+      let brand = campaign.brand;
+      // A pasted-text campaign has no site to read a brand off, and that is a
+      // neutral page rather than a failure worth a note.
+      if (!brand && campaign.source_url) {
+        const { brand: kit, branded } = await readBrand(campaign.source_url);
+        brand = kit;
+        notes = [...notes, ...kit.notes];
+        brandNote = branded
+          ? `Brand read from ${new URL(kit.source_url).hostname}: `
+            + `${kit.primary}${kit.accent !== kit.primary ? ` and ${kit.accent}` : ''}`
+            + `${kit.google_fonts.length ? `, ${kit.google_fonts.join(' and ')}` : ''}`
+            + `${kit.logo_url ? ', logo placed' : ', no logo found'}`
+            + `${kit.confidence === 'low' ? ' — LOW CONFIDENCE, check it against your site' : ''}.`
+          : 'No brand could be read from the source, so the pages stay neutral.';
+      }
+
       await db.from('campaigns').update({
         scraped_data: { ...(campaign.scraped_data ?? {}), brief },
+        brand,
         status: 'base_review',
         error_message: null,
       }).eq('id', campaign.id);
@@ -203,7 +298,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       return {
         status: 'base_review', done: false, waiting: false, terminal: false, notes,
         did: `Product brief written: ${brief.product_name} — `
-          + `${brief.features.length} features, ${brief.review_snippets.length} real review quotes.`,
+          + `${brief.features.length} features, ${brief.review_snippets.length} real review quotes.`
+          + `${brandNote ? ` ${brandNote}` : ''}`,
       };
     }
 
@@ -230,7 +326,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
 
       let page: BasePage;
       try {
-        ({ page } = await buildBasePage(brief, campaign.base_page_guidance));
+        ({ page } = await buildBasePage(brief, campaign.product_type, campaign.base_page_guidance));
       } catch (e) {
         return fail(campaign.id, `Could not write the base page: ${(e as Error).message}`);
       }
@@ -245,24 +341,36 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         offer_headline: page.offer_headline,
         offer_body: page.offer_body,
         cta_button_text: page.cta_button_text,
-        // The CTA is the operator's checkout. Falling back to the product page
-        // is better than a dead button, and is stated rather than silent.
-        cta_url: campaign.checkout_url || campaign.source_url || '#',
+        // A checkout link, or a tel: for the kinds of sale that close on a call.
+        // Falling back to the product page is better than a dead button, and is
+        // stated rather than silent.
+        cta_url: ctaUrlFor(campaign),
       });
       if (error) return fail(campaign.id, `Could not save the base page: ${error.message}`);
 
       const notes: string[] = [];
-      if (!campaign.checkout_url) {
+      if (spec(campaign.product_type).ctaKind === 'checkout' && !campaign.checkout_url) {
         notes.push('No checkout URL set, so the CTA points at the product page. '
           + 'Set one before running ads.');
       }
       // Said here rather than left for him to notice: an empty testimonials array
       // means every one of the twenty pages ships with no proof section, and the
       // usual cause is a brief built from a home page instead of a product page.
+      //
+      // For an ebook or a vehicle it is the expected answer rather than a
+      // symptom, so it is said differently: nobody publishes customer reviews
+      // inside their own book, and one second-hand ute has never been reviewed.
+      // Telling him to re-point the campaign there would be advice that cannot
+      // work.
       if (!page.testimonials.length) {
-        notes.push('No real customer reviews were found, so this page has no testimonials '
-          + 'and neither will the twenty. If the product page has reviews on it, point the '
-          + 'campaign at that page rather than the home page and run it again.');
+        const target = personaTarget(campaign);
+        notes.push(campaign.product_type === 'ecom'
+          ? 'No real customer reviews were found, so this page has no testimonials and '
+            + `neither will the ${target}. If the product page has reviews on it, point the `
+            + 'campaign at that page rather than the home page and run it again.'
+          : 'No customer reviews, which is normal for this kind of sale — the pages carry '
+            + 'no testimonials rather than invented ones. Real quotes from past buyers are '
+            + 'the one thing that would lift these pages, if you have any.');
       }
 
       return {
@@ -292,14 +400,25 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         };
       }
 
-      const urls = brief.image_urls ?? [];
+      // The operator's own uploads come FIRST and are never subject to the
+      // model having noticed them: a vehicle has no storefront gallery and an
+      // ebook has no images at all, so on those two kinds this list is the
+      // whole library. Deduped because a listing page that scrapes cleanly can
+      // legitimately return a photo the operator also uploaded.
+      const urls = [...new Set([
+        ...(campaign.uploaded_image_urls ?? []),
+        ...(brief.image_urls ?? []),
+      ])];
       if (!urls.length) {
         await db.from('campaigns').update({ status: 'personas' }).eq('id', campaign.id);
         return {
           status: 'personas', done: false, waiting: false, terminal: false,
-          did: 'No photographs were found on the source page, so the pages ship without them.',
-          notes: ['Nothing here generates a picture. If the pages should have images, '
-            + 'point the campaign at a page that has product photos on it.'],
+          did: 'No photographs were found, so the pages ship without them.',
+          notes: [campaign.product_type === 'ecom'
+            ? 'Nothing here generates a picture. If the pages should have images, point the '
+              + 'campaign at a page that has product photos on it.'
+            : 'Nothing here generates a picture. Upload your own photographs on a new '
+              + 'campaign — for this kind of thing they are the only possible source.'],
         };
       }
 
@@ -354,7 +473,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
 
       return {
         status: 'personas', done: false, waiting: false, terminal: false, notes,
-        did: `Looked at ${resolved.library.length} photos from your site, `
+        did: `Looked at ${resolved.library.length} photos, `
           + `${usable} usable as editorial, and placed ${filled} on the main page.`,
       };
     }
@@ -363,6 +482,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
     case 'personas': {
       const brief = campaign.scraped_data?.brief;
       if (!brief) return fail(campaign.id, 'Reached the persona stage with no product brief.');
+      const target = personaTarget(campaign);
 
       const { data: basePage } = await db.from('base_pages')
         .select('*').eq('campaign_id', campaign.id).maybeSingle();
@@ -424,7 +544,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         const library = (libraryRows ?? [])
           .filter((l) => !spokenFor.has(l.source_url));
 
-        if (existing.length >= PERSONA_TARGET) {
+        if (existing.length >= target) {
           await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
           return {
             status: 'pages_built', done: true, waiting: false, terminal: true,
@@ -433,7 +553,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           };
         }
 
-        const want = Math.min(PERSONA_BATCH, PERSONA_TARGET - existing.length);
+        const want = Math.min(PERSONA_BATCH, target - existing.length);
         const rejectedNotes: string[] = [];
         let added = 0;
 
@@ -455,6 +575,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
             };
             batch = await generatePersonaBatch(
               brief, forPrompt, existing, want, libraryForPrompt(library),
+              campaign.product_type, target,
             );
           } catch (e) {
             return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
@@ -518,21 +639,21 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         if (added === 0) {
           return fail(campaign.id,
             `Ran ${MAX_EMPTY_BATCHES} persona batches and every persona duplicated an existing `
-            + `pain point. Stopped at ${existing.length} of ${PERSONA_TARGET} rather than shipping `
+            + `pain point. Stopped at ${existing.length} of ${target} rather than shipping `
             + 'near-identical pages. The product may not support 20 genuinely different buyers.');
         }
 
         const total = existing.length + added;
-        if (total >= PERSONA_TARGET) {
+        if (total >= target) {
           await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
         }
         return {
-          status: total >= PERSONA_TARGET ? 'pages_built' : 'personas',
-          done: total >= PERSONA_TARGET,
+          status: total >= target ? 'pages_built' : 'personas',
+          done: total >= target,
           waiting: false,
-          terminal: total >= PERSONA_TARGET,
+          terminal: total >= target,
           personas: total,
-          did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${PERSONA_TARGET}).`,
+          did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${target}).`,
           notes: rejectedNotes,
         };
       } finally {

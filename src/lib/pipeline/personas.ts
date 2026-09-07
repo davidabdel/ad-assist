@@ -1,9 +1,10 @@
 import { generate } from '@/lib/llm';
 import { normalisePainPoint, uniqueSlug } from '@/lib/slug';
+import { COPY_RULES, PERSONA_RULES, type ProductType } from '@/lib/product-type';
 import { PersonaBatchSchema, type BasePage, type PersonaDraft, type ProductBrief } from './schemas';
 
 /**
- * Stage 2b — twenty buyer personas, five at a time.
+ * Stage 2b — the buyer personas, five at a time.
  *
  * WHY BATCHES. The spec asks for one call producing all twenty. Twenty personas
  * with three reasons each is a very long single generation: it risks the output
@@ -11,7 +12,8 @@ import { PersonaBatchSchema, type BasePage, type PersonaDraft, type ProductBrief
  * anywhere throws away all twenty. Five at a time is resumable — a failed batch
  * costs one batch — and every batch after the first can see who already exists,
  * which is a better duplicate defence than asking one call to stay varied
- * across twenty items.
+ * across twenty items. A five-persona campaign (one specific vehicle — see
+ * lib/product-type.ts) is therefore a single batch, through the same code.
  *
  * DIVERSITY IS ENFORCED HERE, NOT HOPED FOR IN THE PROMPT. Personas whose pain
  * point normalises to one already taken are dropped and the shortfall is
@@ -19,7 +21,7 @@ import { PersonaBatchSchema, type BasePage, type PersonaDraft, type ProductBrief
  */
 
 const SYSTEM = `You are an elite performance marketing director who builds
-persona-specific landing pages for e-commerce products advertised on Meta.
+persona-specific landing pages for things advertised on Meta.
 
 Each persona gets its own copy of a listicle page. Only four things change per
 persona: the top bar, the H1, the first three reasons, and the proof quote.
@@ -62,17 +64,20 @@ them, so the description is all you have.
 
 export type ExistingPersona = { persona_name: string; primary_pain_point: string; slug: string };
 
-function batchPrompt(want: number, existing: ExistingPersona[]): string {
+function batchPrompt(want: number, existing: ExistingPersona[], target: number): string {
   if (!existing.length) {
-    return `Write ${want} distinct buyer personas for this product. `
-      + 'These are the first of twenty, so start with the buyers who make up the '
-      + 'largest share of demand.';
+    return `Write ${want} distinct buyer personas for this. `
+      + (want >= target
+        ? `These are all ${target} of them, so make them the ${target} biggest, most `
+          + 'clearly different reasons somebody buys this.'
+        : `These are the first of ${target}, so start with the buyers who make up the `
+          + 'largest share of demand.');
   }
   const taken = existing
     .map((p, i) => `${i + 1}. ${p.persona_name} — fears: ${p.primary_pain_point}`)
     .join('\n');
   return `These personas already exist for this campaign:\n\n${taken}\n\n`
-    + `Write ${want} MORE, each a genuinely different buyer. A new persona must `
+    + `Write ${want} MORE of ${target}, each a genuinely different buyer. A new persona must `
     + 'not share a fear with any above, even if worded differently. Reach further '
     + 'into the spread — the buyers not yet covered are the point.';
 }
@@ -95,9 +100,18 @@ export async function generatePersonaBatch(
   want: number,
   /** `index: what the photo shows`, one per line. Empty when there is nothing to pick from. */
   imageLibrary = '',
+  productType: ProductType = 'ecom',
+  /** How many this campaign is writing in total. Shapes how wide to reach. */
+  target = 20,
 ): Promise<PersonaBatchResult> {
+  // Both, because a persona writes page copy as well as choosing who it is for:
+  // the vehicle rule that bans "Buy now" has to reach the persona's own three
+  // reasons, not just the base page's seven.
+  const rules = [COPY_RULES[productType], PERSONA_RULES[productType]]
+    .filter(Boolean).join('\n\n');
+
   const { data, usage } = await generate({
-    system: SYSTEM,
+    system: rules ? `${SYSTEM}\n\n${rules}` : SYSTEM,
     cachedContext:
       `PRODUCT BRIEF\n---\n${JSON.stringify(brief, null, 2)}\n---\n\n`
       + `BASE PAGE (reasons 1-3 are what you are replacing; 4-10 are locked and `
@@ -108,7 +122,7 @@ export async function generatePersonaBatch(
       + (imageLibrary
         ? `IMAGE LIBRARY (choose by index, -1 for none)\n---\n${imageLibrary}\n---`
         : 'IMAGE LIBRARY\n---\n(empty — use -1 for every image index)\n---'),
-    prompt: batchPrompt(want, existing),
+    prompt: batchPrompt(want, existing, target),
     schema: PersonaBatchSchema,
     maxTokens: 16000,
   });

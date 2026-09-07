@@ -43,12 +43,20 @@ export const STATUS_LABEL: Record<string, string> = {
   failed: 'Stopped with a problem',
 };
 
-export const PERSONA_TARGET = 20;
+/**
+ * The fallback only. How many pages a campaign gets is a property of what it
+ * sells and lives on the row (see lib/product-type.ts) — a physical product or
+ * an ebook gets twenty, one specific vehicle gets five. Used where a target has
+ * genuinely not been read yet, never as the answer.
+ */
+export const DEFAULT_PERSONA_TARGET = 20;
 
 export function buildSteps(input: {
   status: string;
   hasBrief: boolean;
   personaCount: number;
+  /** How many pages THIS campaign is writing. */
+  personaTarget: number;
   hasSourceUrl: boolean;
   /** The scrape itself reported failure, as opposed to what came after it. */
   ingestFailed: boolean;
@@ -76,8 +84,8 @@ export function buildSteps(input: {
   imagesPlaced: number;
 }): Step[] {
   const {
-    status, hasBrief, personaCount, hasSourceUrl, ingestFailed, ingestDone, usesMac, hasBasePage,
-    hasImages, imagesPlaced,
+    status, hasBrief, personaCount, personaTarget, hasSourceUrl, ingestFailed, ingestDone,
+    usesMac, hasBasePage, hasImages, imagesPlaced,
   } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
@@ -127,13 +135,13 @@ export function buildSteps(input: {
       key: 'base',
       title: 'Writing the main page, for you to approve',
       detail: rank > 2 || (failed && failedAt > 2)
-        ? 'Approved. Seven of its ten reasons appear on every one of the twenty pages.'
+        ? `Approved. Seven of its ten reasons appear on every one of the ${personaTarget} pages.`
         : hasBasePage
           ? 'Written and waiting. Read it below — seven of its ten reasons go onto all '
-            + `${PERSONA_TARGET} pages unchanged, so nothing else runs until you approve it.`
+            + `${personaTarget} pages unchanged, so nothing else runs until you approve it.`
           : 'One page written for the broadest buyer. It is the checkpoint: seven of its ten '
-            + `reasons are copied onto all ${PERSONA_TARGET} pages, so a mistake here is a `
-            + `mistake ${PERSONA_TARGET} times.`,
+            + `reasons are copied onto all ${personaTarget} pages, so a mistake here is a `
+            + `mistake ${personaTarget} times.`,
       state: mark(2, rank >= 3, rank === 2),
     },
     {
@@ -149,9 +157,9 @@ export function buildSteps(input: {
     },
     {
       key: 'pages',
-      title: `Writing ${PERSONA_TARGET} landing pages`,
-      detail: personaCount > 0 && personaCount < PERSONA_TARGET
-        ? `${personaCount} of ${PERSONA_TARGET} written. Each one is a different kind of buyer, `
+      title: `Writing ${personaTarget} landing pages`,
+      detail: personaCount > 0 && personaCount < personaTarget
+        ? `${personaCount} of ${personaTarget} written. Each one is a different kind of buyer, `
           + 'with their own headline and their own reasons to buy.'
         : 'One page per kind of buyer — the nervous first-timer, the gift buyer, the upgrader — '
           + 'each with its own headline, its own reasons and its own pictures.',

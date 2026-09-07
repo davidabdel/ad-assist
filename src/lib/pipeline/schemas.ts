@@ -82,6 +82,66 @@ export const BasePageSchema = z.object({
 });
 export type BasePage = z.infer<typeof BasePageSchema>;
 
+/**
+ * The brand pass. One call, one look at the seller's own logo, and a decision
+ * about which of the colours and typefaces on their site are the brand.
+ *
+ * A MODEL RATHER THAN ARITHMETIC, FOR ONE SPECIFIC REASON. The candidate list
+ * this call receives is noisy in a way no counting rule survives: page builders
+ * ship their own defaults in the customer's stylesheet, under exactly the names
+ * a counting rule would trust. GoHighLevel declares `--primary` as a green that
+ * appears nowhere on the rendered page, while the real brand — two teals — sits
+ * under machine-generated names. The tie-break that works is looking at the
+ * logo, so the thing that decides has to be able to see it.
+ *
+ * Contrast is NOT asked for here. "What colour text goes on this button" is
+ * arithmetic and is computed in `lib/brand.ts`, because a model answers white
+ * nine times in ten and the tenth is unreadable.
+ */
+export const BrandChoiceSchema = z.object({
+  primary_color: z.string().describe(
+    'The colour this brand leads with, as #rrggbb. Must be one of the candidate '
+    + 'colours listed, copied exactly.',
+  ),
+  accent_color: z.string().describe(
+    'The colour their own buy buttons are, as #rrggbb, from the candidates. '
+    + 'Often the same as primary — repeat it rather than inventing a second one.',
+  ),
+  ink_color: z.string().describe(
+    'Body text colour, as #rrggbb. Almost always a near-black from the neutrals.',
+  ),
+  surface_color: z.string().describe(
+    'Page background, as #rrggbb. Almost always white or a near-white from the neutrals.',
+  ),
+  heading_font_family: z.string().describe(
+    'The ONE family name their headings use — "Urbanist", not the whole stack, '
+    + 'and no quotes. Empty string when the evidence does not say.',
+  ),
+  heading_font_generic: z.enum(['serif', 'sans-serif']).describe(
+    'Which generic the heading family belongs to, so the fallback matches.',
+  ),
+  body_font_family: z.string().describe('Same, for body text. Empty string when unknown.'),
+  body_font_generic: z.enum(['serif', 'sans-serif']),
+  logo_index: z.number().describe(
+    'Index of the image that is the brand\'s logo — the one to put at the top of '
+    + 'a page. -1 when none of them is a logo. A photograph is not a logo.',
+  ),
+  icon_index: z.number().describe(
+    'Index of the square icon for the browser tab. -1 when there is none. May be '
+    + 'the same image as the logo.',
+  ),
+  site_name: z.string().describe('The brand name as it appears on their site. Empty if unclear.'),
+  confidence: z.enum(['high', 'low']).describe(
+    "'low' when the evidence is thin or contradictory and the operator should "
+    + 'check the colours against their site before running ads.',
+  ),
+  reasoning: z.string().describe(
+    'One or two plain sentences saying what told you. Shown to the operator, so '
+    + 'write it for them: "the logo is teal and that teal is on the buy button".',
+  ),
+});
+export type BrandChoice = z.infer<typeof BrandChoiceSchema>;
+
 export const PersonaSchema = z.object({
   persona_name: z.string().describe('Who they are, 2-4 words. "Shift-Working Nurse", not "Persona 3".'),
   slug: z.string().describe('lowercase-hyphenated, derived from the name.'),

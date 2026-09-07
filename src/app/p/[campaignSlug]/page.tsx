@@ -15,6 +15,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     title: page.page_title,
     description: page.meta_description ?? undefined,
     robots: { index: false, follow: false },
+    ...(page.brand?.icon_url ? { icons: { icon: page.brand.icon_url } } : {}),
   };
 }
 

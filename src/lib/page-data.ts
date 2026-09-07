@@ -1,4 +1,6 @@
 import { publicClient } from './supabase';
+import type { BrandKit } from './brand';
+import type { ProductType } from './product-type';
 
 export type Reason = {
   number: number;
@@ -37,6 +39,22 @@ export type PublicPage = {
   offer_body: string | null;
   cta_button_text: string;
   cta_url: string;
+  /**
+   * How this sale closes, which is a property of what is being sold rather than
+   * of the buyer reading it. `vehicle` swaps the checkout link for a phone
+   * number and an enquiry form; see lib/product-type.ts.
+   */
+  product_type: ProductType;
+  /** The number to ring. Only ever set on the kinds of sale that close on a call. */
+  contact_phone: string | null;
+  /**
+   * The seller's own colours, type and logo. Belongs to the campaign, not to a
+   * persona: all twenty pages wear the same identity, because the identity is
+   * what has to survive the click through to their checkout. Null on a campaign
+   * built before the brand stage existed, or one whose site gave up nothing —
+   * the renderer falls back to the neutral editorial theme.
+   */
+  brand: BrandKit | null;
 };
 
 /**

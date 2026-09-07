@@ -62,7 +62,7 @@ export async function POST(
       did: status === 'pending'
         ? 'Starting again from reading your product page.'
         : status === 'base_review'
-          ? 'Back to the main page, for you to approve before the twenty are written.'
+          ? 'Back to the main page, for you to approve before the rest are written.'
           : `Carrying on from ${personaCount} of 20 landing pages.`,
     });
   } catch (e) {
