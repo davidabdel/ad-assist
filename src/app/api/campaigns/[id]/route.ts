@@ -28,7 +28,7 @@ export async function GET(
 
     const [
       { data: personas }, { data: base }, { data: jobs }, { data: images }, { data: leads },
-      { data: formats }, { data: ads },
+      { data: formats }, { data: ads }, { data: ideas }, { data: spend }, { data: settings },
     ] = await Promise.all([
       db.from('personas')
         .select('id, persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count')
@@ -68,11 +68,26 @@ export async function GET(
           + 'qualified, variant_count, primary_text, headline, cta_label, landing_url')
         .eq('campaign_id', id).eq('qualified', true)
         .order('days_running', { ascending: false, nullsFirst: false }).limit(120),
+      // The ideas table, with whatever has been generated from each row hanging
+      // off it. Embedded rather than fetched per row: sixty ideas would be sixty
+      // requests on a screen that polls.
+      db.from('ad_ideas')
+        .select('*, generated_assets(id, state, result_url, stored_url, credits_charged, '
+          + 'fail_reason, kie_task_id, created_at, completed_at)')
+        .eq('campaign_id', id).order('persona_id').order('idea_index'),
+      // The ledger, whole. It is short — one row per generation — and showing
+      // the lines rather than only a total is what makes a ceiling believable.
+      db.from('spend_log')
+        .select('id, asset_id, credits, usd, note, created_at')
+        .eq('campaign_id', id).order('created_at', { ascending: false }),
+      db.from('settings')
+        .select('campaign_spend_ceiling').eq('user_id', owner.id).maybeSingle(),
     ]);
 
     // Named rather than joined, so the screen can say WHICH page produced an
     // enquiry — the entire reason for building several of them.
     const personaName = new Map((personas ?? []).map((p) => [p.id as string, p.persona_name as string]));
+    const personaIndex = new Map((personas ?? []).map((p) => [p.id as string, p.persona_index as number]));
 
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? '';
     return Response.json({
@@ -106,6 +121,36 @@ export async function GET(
         persona_name: l.persona_id ? personaName.get(l.persona_id) ?? null : null,
       })),
       formats: formats ?? [],
+      // Named, so the table can group by buyer without a second request and
+      // without the browser having to join two lists by id.
+      // Sorted by BUYER ORDER, not by persona id. The database sort is on a
+      // uuid, which puts the twenty buyers in an order that matches nothing on
+      // the rest of the screen — the pages list is in persona_index order and
+      // the tables have to agree.
+      ideas: ((ideas ?? []) as unknown as { persona_id: string; idea_index: number }[])
+        .map((i) => ({
+          ...i,
+          persona_name: personaName.get(i.persona_id as string) ?? null,
+          persona_index: personaIndex.get(i.persona_id as string) ?? 0,
+        }))
+        .sort((a, b) => a.persona_index - b.persona_index || a.idea_index - b.idea_index),
+      spend: (() => {
+        const rows = (spend ?? []) as unknown as { usd: number | string }[];
+        const total = rows.reduce((n, r) => n + Number(r.usd ?? 0), 0);
+        // 150 is the schema's own default, used when this owner has no settings
+        // row — the same fallback `record_spend` applies in SQL, so the number
+        // on screen is the number that will actually be enforced.
+        const ceiling = Number(
+          (settings as { campaign_spend_ceiling?: number | string } | null)
+            ?.campaign_spend_ceiling ?? 150,
+        );
+        return {
+          total: Math.round(total * 100) / 100,
+          ceiling,
+          remaining: Math.round(Math.max(0, ceiling - total) * 100) / 100,
+          lines: spend ?? [],
+        };
+      })(),
       // Capped above, so the count has to come from the jobs rather than from
       // `ads.length` — a list that stops at 120 must not be reported as the
       // whole scan.

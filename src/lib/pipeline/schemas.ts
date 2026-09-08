@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CTA_LABELS } from '@/lib/ad-fields';
 
 /**
  * Structured-output schemas. Deliberately free of length constraints
@@ -276,3 +277,93 @@ export const FormatSpecBatchSchema = z.object({
   ),
 });
 export type FormatSpecBatch = z.infer<typeof FormatSpecBatchSchema>;
+
+/**
+ * The ad ideas for one buyer.
+ *
+ * WHAT THIS PROMPT IS AND IS NOT ALLOWED TO SEE. It sees the product brief, one
+ * persona, and the FORMAT SPECS — descriptions of what winning ads DO. It never
+ * sees a scanned ad. That separation is the whole architecture of the scan
+ * stage (see formats.ts) and it is the reason none of David's ads can come out
+ * wearing somebody else's sentences.
+ *
+ * `image_prompt` is the field that does the most work and the one most easily
+ * got wrong. The image model is an EDITOR: it is handed one of the seller's own
+ * photographs and told what to change. So the prompt is an instruction to a
+ * retoucher, not a description to a painter — "keep the product exactly as
+ * photographed, place it on …" — and anything that would repaint the product
+ * itself is a picture of a thing that does not exist.
+ */
+const AdIdeaSchema = z.object({
+  format_index: z.number().describe(
+    'Index of the format from the FORMATS list this idea is built on. -1 only '
+    + 'when the list is empty.',
+  ),
+  angle: z.string().describe(
+    'The argument this ad makes to THIS buyer, in one line. Not the format name '
+    + '— what is being claimed and why they would care.',
+  ),
+  hook: z.string().describe(
+    'The first thing the viewer reads or sees, written out. This is real copy, '
+    + 'in the product\'s own voice, following the format\'s hook PATTERN — not a '
+    + 'restatement of the pattern.',
+  ),
+  headline: z.string().describe(
+    'Meta\'s headline field. Short — it truncates around 40 characters on a '
+    + 'phone, so the point has to be inside that.',
+  ),
+  primary_text: z.string().describe(
+    'Meta\'s primary text: the body above the image. Roughly 50-150 words. '
+    + 'Everything before the first line break has to work alone, because that is '
+    + 'all that shows before "See more".',
+  ),
+  cta_label: z.enum(CTA_LABELS).describe(
+    'The Ads Manager button. Must be one a buyer of THIS thing would press.',
+  ),
+  visual_concept: z.string().describe(
+    'What is on screen, in plain English, for somebody deciding whether this ad '
+    + 'is worth making. One or two sentences. Not the prompt.',
+  ),
+  source_image_index: z.number().describe(
+    'Index of the photograph from the IMAGE LIBRARY this ad is built out of — '
+    + 'the picture the editor starts from, or the first frame of the video. '
+    + 'Choose the one that already shows what the ad is about. -1 only when the '
+    + 'library genuinely contains nothing usable, and an idea with -1 cannot be '
+    + 'generated, so use it as a last resort rather than a default.',
+  ),
+  image_prompt: z.string().describe(
+    'THE EDIT INSTRUCTION, written to a retoucher who is holding the chosen '
+    + 'photograph. Say what to keep and what to change. The product itself is '
+    + 'always kept — its shape, colour, materials, labelling and proportions are '
+    + 'photographic fact and must never be restyled, recoloured or redrawn. '
+    + 'Change the setting, the light, the framing, the props, the people. Do not '
+    + 'ask for words, logos, prices or badges to be rendered into the picture: '
+    + 'image models spell them wrong, and Meta puts the real copy around the ad '
+    + 'anyway. Empty string ONLY for a video idea.',
+  ),
+  video_prompt: z.string().describe(
+    'For a video idea: one continuous ten-second shot that STARTS from the '
+    + 'chosen photograph and moves. Describe the camera move, what enters or '
+    + 'changes, and the ending frame. The product stays exactly as photographed '
+    + 'throughout. No dialogue, no on-screen text, no music cues — the ad plays '
+    + 'muted in the feed. Empty string for a static idea.',
+  ),
+  storyboard_beats: z.array(z.object({
+    at_second: z.number().describe('When this beat starts, in seconds from 0.'),
+    on_screen: z.string().describe('What the viewer sees at that moment.'),
+  })).describe(
+    'For a video idea, the shot broken into 3-4 beats — shown to the operator so '
+    + 'they can judge the ad before paying for it. Empty array for a static.',
+  ),
+  why_this_works: z.string().describe(
+    'One sentence: what this borrows from the format, and what makes it this '
+    + 'buyer\'s ad rather than a generic one. Written for the operator.',
+  ),
+});
+
+export const AdIdeaBatchSchema = z.object({
+  ideas: z.array(AdIdeaSchema).describe(
+    'One entry per idea requested, in the order the prompt asks for them.',
+  ),
+});
+export type AdIdeaDraft = z.infer<typeof AdIdeaSchema>;

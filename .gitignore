@@ -44,3 +44,6 @@ next-env.d.ts
 scanner/node_modules/
 .env
 .env.local
+
+# throwaway harnesses and downloaded artefacts, never shipped
+/.scratch/
