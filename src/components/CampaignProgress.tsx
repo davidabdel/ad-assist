@@ -150,6 +150,13 @@ type GeneratedAsset = {
   credits_charged: number | null;
   fail_reason: string | null;
   kie_task_id: string;
+  /** Which go this was. 1 for everything made before redo existed. */
+  attempt: number | null;
+  /** The instruction that made THIS file, frozen at submit. */
+  prompt_used: string | null;
+  /** Set when it was looked at and sent back. The file is kept regardless. */
+  rejected_at: string | null;
+  rejected_note: string | null;
 };
 
 type AdIdea = {
@@ -174,6 +181,10 @@ type AdIdea = {
   status: 'draft' | 'approved' | 'generating' | 'generated' | 'failed' | 'rejected';
   rejected_reason: string | null;
   edited_at: string | null;
+  /** Which go the row is on now. 2 means one result has been sent back. */
+  attempt: number | null;
+  /** What was said to be wrong with the last result, in the operator's words. */
+  redo_note: string | null;
   generated_assets: GeneratedAsset[];
 };
 
@@ -1207,6 +1218,8 @@ function IdeaRow({
   idea, onAction,
 }: { idea: AdIdea; onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }> }) {
   const [editing, setEditing] = useState(false);
+  const [redoing, setRedoing] = useState(false);
+  const [redoNote, setRedoNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState({
@@ -1217,11 +1230,42 @@ function IdeaRow({
     destination_url: idea.destination_url,
   });
 
-  const asset = idea.generated_assets.find((a) => a.state === 'success')
+  // Every file this idea has produced, oldest first. A rejected one is kept
+  // rather than replaced: it was paid for, and it is what the next attempt is
+  // being judged against.
+  const finished = idea.generated_assets
+    .filter((a) => a.state === 'success')
+    .sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1));
+  const rejectedAttempts = finished.filter((a) => a.rejected_at);
+  const asset = finished.find((a) => !a.rejected_at)
     ?? idea.generated_assets[idea.generated_assets.length - 1];
-  const fileUrl = asset?.stored_url ?? asset?.result_url ?? null;
+  const fileUrl = asset && !asset.rejected_at
+    ? asset.stored_url ?? asset.result_url ?? null
+    : null;
   const pill = STATUS_PILL[idea.status] ?? STATUS_PILL.draft;
   const cost = Number(idea.est_usd);
+  const attempt = Math.max(1, Number(idea.attempt ?? 1));
+  const canRedo = idea.status === 'generated' || idea.status === 'failed';
+
+  /**
+   * Open the editor on what the row says RIGHT NOW.
+   *
+   * `draft` is seeded once at mount, and the row's fields move underneath it —
+   * the screen polls, and a redo rewrites `kie_prompt` outright. Opening the
+   * editor on the mount-time copy would show the operator the instruction that
+   * was replaced, and saving it would silently undo the revision they had just
+   * asked for.
+   */
+  function startEditing() {
+    setDraft({
+      headline: idea.headline,
+      primary_text: idea.primary_text,
+      cta_label: idea.cta_label,
+      kie_prompt: idea.kie_prompt ?? '',
+      destination_url: idea.destination_url,
+    });
+    setEditing(true);
+  }
 
   async function run(label: string, init: RequestInit) {
     setBusy(label);
@@ -1229,6 +1273,8 @@ function IdeaRow({
     try {
       await onAction(idea.id, init);
       setEditing(false);
+      setRedoing(false);
+      setRedoNote('');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1361,22 +1407,41 @@ function IdeaRow({
             </div>
           </div>
 
-          <details className="mt-3">
+          {/* Open by default once a result has been sent back. The panel below
+              tells the operator to read the instruction before approving, and a
+              collapsed <details> makes that an instruction to go looking — on
+              the one row where the wording has just changed underneath them. */}
+          <details className="mt-3" open={idea.status === 'draft' && attempt > 1}>
             <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
-              The instruction that makes the {idea.media_type === 'image' ? 'picture' : 'video'}
+              {idea.status === 'draft' && attempt > 1
+                ? 'The rewritten instruction'
+                : `The instruction that makes the ${idea.media_type === 'image' ? 'picture' : 'video'}`}
             </summary>
             <p className="mt-2 whitespace-pre-wrap rounded-lg bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
               {idea.kie_prompt}
             </p>
             {idea.video_storyboard?.beats?.length ? (
-              <ul className="mt-2 space-y-1 text-xs text-zinc-500">
-                {idea.video_storyboard.beats.map((b) => (
-                  <li key={`${b.at_second}-${b.on_screen}`}>
-                    <span className="font-mono font-bold text-zinc-400">{b.at_second}s</span>{' '}
-                    {b.on_screen}
-                  </li>
-                ))}
-              </ul>
+              <>
+                {/* The beats were written for the FIRST instruction and are never
+                    rewritten, because they are a note on the plan rather than
+                    anything sent to the model. Once the instruction has been
+                    revised they can contradict it outright — so they are labelled
+                    rather than left to look current. */}
+                {attempt > 1 ? (
+                  <p className="mt-2 text-xs font-semibold text-amber-700">
+                    Written for attempt 1. The instruction above has changed since; where the
+                    two disagree, the instruction is what runs.
+                  </p>
+                ) : null}
+                <ul className="mt-2 space-y-1 text-xs text-zinc-500">
+                  {idea.video_storyboard.beats.map((b) => (
+                    <li key={`${b.at_second}-${b.on_screen}`}>
+                      <span className="font-mono font-bold text-zinc-400">{b.at_second}s</span>{' '}
+                      {b.on_screen}
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : null}
             {idea.them_vs_us?.why_this_works ? (
               <p className="mt-2 text-xs leading-5 text-zinc-500">
@@ -1388,8 +1453,13 @@ function IdeaRow({
         </>
       )}
 
-      {fileUrl && idea.status === 'generated' ? (
+      {fileUrl ? (
         <div className="mt-4">
+          {(asset?.attempt ?? 1) > 1 ? (
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-400">
+              Attempt {asset?.attempt}
+            </p>
+          ) : null}
           {idea.media_type === 'image' ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-xl border border-black/10" />
@@ -1407,7 +1477,68 @@ function IdeaRow({
               Download
             </a>
           </p>
+          {idea.media_type === 'video' ? (
+            // The known failure mode, said where it can be acted on. A ten-second
+            // generation is long enough for the model to lose the object, and it
+            // loses it at the END — which is the part nobody watches twice.
+            <p className="mt-1 text-xs text-zinc-400">
+              Watch the last second before you post it. Ten seconds is long enough for the
+              model to drift off the product; if it has, send it back and say so.
+            </p>
+          ) : null}
         </div>
+      ) : null}
+
+      {/* Rejected attempts are kept, not replaced. Two reasons: they were paid
+          for, and the only way to tell whether a note actually worked is to be
+          able to look at the one before it. */}
+      {rejectedAttempts.length ? (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+            {rejectedAttempts.length} earlier attempt{rejectedAttempts.length === 1 ? '' : 's'} you
+            sent back
+          </summary>
+          <div className="mt-3 space-y-4">
+            {rejectedAttempts.map((old) => {
+              const url = old.stored_url ?? old.result_url;
+              return (
+                <div key={old.id} className="rounded-xl bg-zinc-50 p-3 ring-1 ring-zinc-200">
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+                    Attempt {old.attempt ?? 1} · sent back
+                  </p>
+                  {old.rejected_note ? (
+                    <p className="mt-1 text-sm leading-6 text-zinc-700">
+                      <span className="font-semibold">You said:</span> {old.rejected_note}
+                    </p>
+                  ) : null}
+                  {url ? (
+                    idea.media_type === 'image' ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={url} alt="" className="mt-2 w-full rounded-lg border border-black/10 opacity-75" />
+                    ) : (
+                      <video src={url} controls playsInline className="mt-2 w-full rounded-lg border border-black/10" />
+                    )
+                  ) : null}
+                  {old.prompt_used ? (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-xs font-semibold text-zinc-400 hover:text-zinc-700">
+                        The instruction that made this one
+                      </summary>
+                      <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-5 text-zinc-500">
+                        {old.prompt_used}
+                      </p>
+                    </details>
+                  ) : null}
+                  <p className="mt-2 text-xs text-zinc-400">
+                    {old.credits_charged != null
+                      ? `Charged ${old.credits_charged} credits — sending it back does not refund it.`
+                      : 'Charged at the estimate — sending it back does not refund it.'}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </details>
       ) : null}
 
       {idea.status === 'generating' || idea.status === 'approved' ? (
@@ -1418,10 +1549,84 @@ function IdeaRow({
         </p>
       ) : null}
 
-      {idea.rejected_reason ? (
+      {/* After a redo the row is a draft again, and the two things that decide
+          whether to approve it are what was wrong last time and what was
+          changed about it. Both are shown together rather than as a warning
+          strip, because nothing here has gone wrong — this is the loop working. */}
+      {idea.status === 'draft' && attempt > 1 ? (
+        <div className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+            Attempt {attempt} — not made yet
+          </p>
+          {idea.redo_note ? (
+            <p className="mt-1"><span className="font-semibold">You said:</span> {idea.redo_note}</p>
+          ) : (
+            <p className="mt-1">
+              Sent back for another roll of the same instruction. These models are not
+              deterministic, so the same words can give a different result.
+            </p>
+          )}
+          {idea.rejected_reason ? (
+            <p className="mt-1">
+              <span className="font-semibold">What changed:</span> {idea.rejected_reason}
+            </p>
+          ) : null}
+          <p className="mt-2 text-xs text-amber-800">
+            Read the instruction above before approving — this is the sentence that will be
+            used, and approving it spends ${cost.toFixed(2)} again.
+          </p>
+        </div>
+      ) : idea.rejected_reason ? (
         <p className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {idea.rejected_reason}
         </p>
+      ) : null}
+
+      {/* Rejecting a finished file. Two clicks and not one, because the second
+          click is where the money goes and the instruction it will spend it on
+          has to be on screen first. */}
+      {redoing ? (
+        <div className="mt-4 rounded-xl bg-zinc-50 p-4 ring-1 ring-zinc-200">
+          <Field
+            label="What is wrong with it?"
+            help={idea.media_type === 'video'
+              ? 'Plain words. “The bottle turns into a flip cap by the end”, “too dark”, '
+                + '“the hand blocks the label”. Leave it empty to run the same instruction '
+                + 'again for a different roll.'
+              : 'Plain words. “Wrong kitchen”, “the label is unreadable”, “too cluttered”. '
+                + 'Leave it empty to run the same instruction again for a different roll.'}
+          >
+            <textarea
+              className={inputClass}
+              rows={3}
+              value={redoNote}
+              placeholder="Leave empty for another roll of the same instruction"
+              onChange={(e) => setRedoNote(e.target.value)}
+            />
+          </Field>
+          <p className="mt-2 text-sm leading-6 text-zinc-500">
+            This does not spend anything. The instruction gets rewritten from what you say
+            here and the row comes back as a draft, so you read the new instruction before
+            approving it. The {idea.media_type === 'image' ? 'picture' : 'video'} you are
+            sending back is kept — it was paid for, and it is what the next one gets compared
+            against.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <Button
+              disabled={busy !== null}
+              onClick={() => run('redo', {
+                method: 'POST', body: JSON.stringify({ action: 'redo', note: redoNote }),
+              })}
+            >
+              {busy === 'redo'
+                ? (redoNote.trim() ? 'Rewriting the instruction…' : 'Sending it back…')
+                : (redoNote.trim() ? 'Rewrite it and send it back' : 'Send it back as-is')}
+            </Button>
+            <Button variant="ghost" disabled={busy !== null} onClick={() => setRedoing(false)}>
+              Keep it
+            </Button>
+          </div>
+        </div>
       ) : null}
 
       {error ? (
@@ -1430,7 +1635,7 @@ function IdeaRow({
         </div>
       ) : null}
 
-      {!editing ? (
+      {!editing && !redoing ? (
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-200 pt-4">
           {idea.status === 'draft' ? (
             <>
@@ -1440,9 +1645,13 @@ function IdeaRow({
                   method: 'POST', body: JSON.stringify({ action: 'approve' }),
                 })}
               >
-                {busy === 'approve' ? 'Submitting…' : `Approve — $${cost.toFixed(2)}`}
+                {busy === 'approve'
+                  ? 'Submitting…'
+                  : attempt > 1
+                    ? `Approve attempt ${attempt} — $${cost.toFixed(2)}`
+                    : `Approve — $${cost.toFixed(2)}`}
               </Button>
-              <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(true)}>
+              <Button variant="ghost" disabled={busy !== null} onClick={startEditing}>
                 Rewrite it
               </Button>
               <Button
@@ -1457,6 +1666,19 @@ function IdeaRow({
             </>
           ) : null}
 
+          {/* The exit a finished row never had. A generated ad used to be a dead
+              end — no buttons at all — which made a video that drifted in its
+              last second permanent. */}
+          {canRedo ? (
+            <Button
+              variant="ghost"
+              disabled={busy !== null}
+              onClick={() => setRedoing(true)}
+            >
+              {idea.status === 'failed' ? 'Change it and try again' : 'Not right — send it back'}
+            </Button>
+          ) : null}
+
           {idea.status === 'rejected' || idea.status === 'failed' ? (
             <>
               <Button
@@ -1468,7 +1690,7 @@ function IdeaRow({
               >
                 {busy === 'reset' ? 'Putting it back…' : 'Put it back'}
               </Button>
-              <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(true)}>
+              <Button variant="ghost" disabled={busy !== null} onClick={startEditing}>
                 Rewrite it
               </Button>
             </>

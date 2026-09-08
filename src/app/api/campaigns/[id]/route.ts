@@ -72,8 +72,13 @@ export async function GET(
       // off it. Embedded rather than fetched per row: sixty ideas would be sixty
       // requests on a screen that polls.
       db.from('ad_ideas')
+        // `attempt`, `prompt_used` and the rejection fields are what let a row
+        // show the ad it made LAST time next to the instruction that is about
+        // to make the next one. Without them a redo looks like the first file
+        // simply vanished.
         .select('*, generated_assets(id, state, result_url, stored_url, credits_charged, '
-          + 'fail_reason, kie_task_id, created_at, completed_at)')
+          + 'fail_reason, kie_task_id, created_at, completed_at, attempt, prompt_used, '
+          + 'rejected_at, rejected_note)')
         .eq('campaign_id', id).order('persona_id').order('idea_index'),
       // The ledger, whole. It is short — one row per generation — and showing
       // the lines rather than only a total is what makes a ceiling believable.

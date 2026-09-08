@@ -42,6 +42,13 @@ export type IdeaRowForSubmit = {
   est_usd: number;
   status: string;
   headline: string;
+  /**
+   * Which go this is. 1 unless a finished result was rejected and sent back —
+   * it is written onto the asset so that two files hanging off one idea can be
+   * told apart, and it is in the ledger note so a second charge on the same
+   * idea is readable as a second attempt rather than a duplicate.
+   */
+  attempt?: number;
 };
 
 /**
@@ -101,6 +108,7 @@ export type ApproveResult = {
  */
 export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult> {
   const db = serviceClient();
+  const attempt = Math.max(1, Math.round(Number(idea.attempt ?? 1)));
 
   if (!idea.kie_prompt?.trim()) {
     throw new Error('This idea has no prompt, so there is nothing to generate.');
@@ -140,7 +148,11 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
       cid: idea.campaign_id,
       cr: idea.est_credits,
       amount: idea.est_usd,
-      note: `estimate · ${idea.media_type} · ${idea.headline.slice(0, 60)}`,
+      // The attempt is in the note because the ledger is read to answer "why
+      // was this campaign charged twice for the same ad?", and the honest
+      // answer — the first one was rejected — has to be legible from the line.
+      note: `estimate · ${idea.media_type}${attempt > 1 ? ` · attempt ${attempt}` : ''} · `
+        + `${idea.headline.slice(0, 60)}`,
     });
     if (error) throw new Error(error.message);
     spendId = data as string;
@@ -193,6 +205,12 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
     kie_task_id: taskId,
     kie_model: idea.kie_model,
     state: 'submitted',
+    attempt,
+    // Copied, not referenced. The idea's `kie_prompt` moves on the moment this
+    // result is rejected and revised, and a file whose instruction is read live
+    // from the row would start describing itself with the sentence written to
+    // replace it.
+    prompt_used: idea.kie_prompt,
   }).select('id').single();
 
   if (assetError || !asset) {
@@ -253,12 +271,13 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
   if (!ideaIds.length) return { checked: 0, finished: 0, failed: 0, notes };
 
   const { data: pending } = await db.from('generated_assets')
-    .select('id, ad_idea_id, kie_task_id, kie_model, state')
+    .select('id, ad_idea_id, kie_task_id, kie_model, state, attempt')
     .in('ad_idea_id', ideaIds)
     .in('state', ['submitted', 'generating']);
 
   const live = (pending ?? []) as unknown as {
     id: string; ad_idea_id: string; kie_task_id: string; kie_model: string; state: string;
+    attempt: number;
   }[];
   if (!live.length) return { checked: 0, finished: 0, failed: 0, notes };
 
@@ -340,7 +359,7 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
         asset_id: asset.id,
         credits: Math.round(status.creditsConsumed),
         usd: usd(status.creditsConsumed),
-        note: 'charged by KIE',
+        note: asset.attempt > 1 ? `charged by KIE · attempt ${asset.attempt}` : 'charged by KIE',
       });
     }
   }

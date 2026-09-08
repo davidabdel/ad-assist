@@ -2,17 +2,21 @@ import { z } from 'zod';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { serviceClient } from '@/lib/supabase';
 import { approveIdea, type IdeaRowForSubmit } from '@/lib/pipeline/assets';
+import { revisePrompt } from '@/lib/pipeline/revise';
 import { CTA_LABELS } from '@/lib/ad-fields';
 
 export const dynamic = 'force-dynamic';
-/** A submit is a network round trip to KIE plus a photograph staged into storage. */
-export const maxDuration = 120;
+/**
+ * A submit is a network round trip to KIE plus a photograph staged into storage.
+ * A redo is a model call instead, which is the slower of the two.
+ */
+export const maxDuration = 180;
 
 /**
  * One row of the ideas table.
  *
  *   PATCH  rewrite it
- *   POST   { action: 'approve' | 'reject' | 'reset' }
+ *   POST   { action: 'approve' | 'reject' | 'reset' | 'redo' }
  *
  * WHY EDITING EXISTS AT ALL. These rows get pasted into Ads Manager by hand, so
  * the operator has the last word on every sentence. An approve-only table would
@@ -22,6 +26,13 @@ export const maxDuration = 120;
  * APPROVE IS THE ONLY BUTTON IN THIS APP THAT SPENDS MONEY. Everything it has
  * to get right — the double-click guard, the ceiling, the one-submit-ever rule
  * — lives in lib/pipeline/assets.ts; this route is the door.
+ *
+ * `redo` is deliberately NOT a second spending button. It rejects a finished
+ * file, rewrites the instruction from what the operator says was wrong with it,
+ * and puts the row back in front of them as a draft. The next generation is
+ * bought by the same Approve as the first one, after they have read the revised
+ * instruction. Buying a roll of a sentence nobody has read is exactly the thing
+ * this table is built to prevent.
  */
 
 /**
@@ -103,9 +114,142 @@ export async function PATCH(
 }
 
 const ActionSchema = z.object({
-  action: z.enum(['approve', 'reject', 'reset']),
+  action: z.enum(['approve', 'reject', 'reset', 'redo']),
   reason: z.string().max(1000).optional(),
+  /**
+   * What is wrong with the finished file, for `redo`. Optional on purpose: an
+   * empty note means "same instruction, another roll", which is a real and
+   * frequently correct answer, because these models are stochastic and a video
+   * that drifted once may not drift again.
+   */
+  note: z.string().max(2000).optional(),
 });
+
+/** Statuses a finished-or-failed result can be sent back from. */
+const REDOABLE = new Set(['generated', 'failed']);
+
+/**
+ * Reject the file that was made and send the row back to be made again.
+ *
+ * Order of operations, which is the design:
+ *
+ *   1. REVISE FIRST, while nothing has changed. The model call is the only step
+ *      that can fail for a reason outside this app, and doing it before any
+ *      write means a failed revision loses nothing — not the note, not the
+ *      file, not the row's status. The operator presses it again.
+ *   2. CLAIM with a conditional update, so a double-click cannot bump the
+ *      attempt counter twice.
+ *   3. MARK the file rejected, keeping it. It was paid for, and attempt 1 next
+ *      to attempt 2 is the only way to tell whether the note worked.
+ */
+async function redoIdea(
+  idea: Record<string, unknown>,
+  note: string | undefined,
+): Promise<Response> {
+  const db = serviceClient();
+  const status = idea.status as string;
+  const ideaId = idea.id as string;
+
+  if (!REDOABLE.has(status)) {
+    return Response.json(
+      {
+        error: status === 'generating' || status === 'approved'
+          ? 'This one is still being made. Wait for the file before deciding about it.'
+          : `Nothing has been made from this idea yet — it is "${status}", so there is no result to reject.`,
+      },
+      { status: 409 },
+    );
+  }
+
+  const trimmed = note?.trim() ?? '';
+  const currentPrompt = (idea.kie_prompt as string | null) ?? '';
+
+  // ── 1. revise, before anything is written ───────────────────────────
+  let revised = currentPrompt;
+  let revisedConcept: string | null = null;
+  let whatChanged: string | null = null;
+  if (trimmed && currentPrompt) {
+    const { data: earlier } = await db.from('generated_assets')
+      .select('rejected_note').eq('ad_idea_id', ideaId)
+      .not('rejected_note', 'is', null)
+      .order('attempt');
+
+    try {
+      const revision = await revisePrompt({
+        mediaType: idea.media_type as 'image' | 'video',
+        currentPrompt,
+        note: trimmed,
+        visualConcept: (idea.visual_concept as string) ?? '',
+        previousNotes: (earlier ?? []).map((r) => r.rejected_note as string),
+      });
+      revised = revision.revised_prompt;
+      // The one-line description of what the ad shows is what most people read
+      // instead of the prompt. Leaving it describing the version that was just
+      // rejected is the same fault as leaving the old prompt in place.
+      revisedConcept = revision.revised_visual_concept || null;
+      whatChanged = revision.what_changed;
+    } catch (e) {
+      return Response.json(
+        {
+          error: `The instruction could not be rewritten (${(e as Error).message}). Nothing `
+            + 'was changed and the ad is still here — try again, or rewrite the instruction '
+            + 'yourself.',
+        },
+        { status: 502 },
+      );
+    }
+  }
+
+  const attempt = Number(idea.attempt ?? 1);
+
+  // ── 2. claim ────────────────────────────────────────────────────────
+  const { data: claimed, error: claimError } = await db.from('ad_ideas').update({
+    status: 'draft',
+    kie_prompt: revised,
+    ...(revisedConcept ? { visual_concept: revisedConcept } : {}),
+    attempt: attempt + 1,
+    redo_note: trimmed || null,
+    approved_at: null,
+    // Whatever was in here described the last result, and there is about to be
+    // a different one. `what_changed` replaces it when there is a revision to
+    // explain, so the row on screen says why its instruction now reads
+    // differently from the file sitting underneath it.
+    rejected_reason: whatChanged,
+  }).eq('id', ideaId).in('status', [...REDOABLE]).select('id').maybeSingle();
+
+  if (claimError) return Response.json({ error: claimError.message }, { status: 500 });
+  if (!claimed) {
+    return Response.json(
+      { error: 'This idea has already moved on — reload the page to see where it is.' },
+      { status: 409 },
+    );
+  }
+
+  // ── 3. keep the file, mark it rejected ──────────────────────────────
+  // Everything finished and not already rejected: a redo means none of what has
+  // been made so far is good enough, and an earlier attempt already carries its
+  // own note.
+  const { error: markError } = await db.from('generated_assets').update({
+    rejected_at: new Date().toISOString(),
+    rejected_note: trimmed || 'Sent back for another roll of the same instruction.',
+  }).eq('ad_idea_id', ideaId).eq('state', 'success').is('rejected_at', null);
+
+  return Response.json({
+    did: trimmed
+      ? `Sent back as attempt ${attempt + 1}. The instruction has been rewritten — read it, `
+        + 'then approve it to spend.'
+      : `Sent back as attempt ${attempt + 1}. Same instruction, so approving it is another roll `
+        + 'of the same dice.',
+    what_changed: whatChanged,
+    revised_prompt: revised,
+    attempt: attempt + 1,
+    // Non-fatal and worth saying: the row IS back in the table, the old file is
+    // simply no longer labelled as rejected.
+    note: markError
+      ? `The previous file could not be marked as rejected (${markError.message}).`
+      : undefined,
+  });
+}
 
 export async function POST(
   req: Request,
@@ -119,9 +263,16 @@ export async function POST(
 
     const parsed = ActionSchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) {
-      return Response.json({ error: 'action must be "approve", "reject" or "reset"' }, { status: 400 });
+      return Response.json(
+        { error: 'action must be "approve", "reject", "reset" or "redo"' },
+        { status: 400 },
+      );
     }
     const db = serviceClient();
+
+    if (parsed.data.action === 'redo') {
+      return await redoIdea(idea as Record<string, unknown>, parsed.data.note);
+    }
 
     if (parsed.data.action === 'reject') {
       const { error } = await db.from('ad_ideas').update({
