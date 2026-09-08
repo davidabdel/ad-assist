@@ -832,7 +832,7 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
     <div className="mt-6">
       <Card>
         <h2 className="text-xl font-bold tracking-tight">
-          {formats.length} format{formats.length === 1 ? '' : 's'} that keep working
+          {formats.length} format{formats.length === 1 ? ' that keeps' : 's that keep'} working
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
           Read from {scan.adsQualified.toLocaleString()} ads that have been live between three
@@ -1133,9 +1133,9 @@ function Ideas({
           {ideas.length} ad idea{ideas.length === 1 ? '' : 's'}
         </h2>
         <p className="mt-1 text-sm leading-6 text-zinc-500">
-          Three per buyer, each built on one of the formats below and pointing at that
-          buyer&rsquo;s own page. Every field can be rewritten before you approve it — these get
-          pasted into Ads Manager by you, so the wording is yours.
+          Each one is built on one of the formats below and points at that buyer&rsquo;s own
+          page. Every field can be rewritten before you approve it — these get pasted into Ads
+          Manager by you, so the wording is yours.
         </p>
         <p className="mt-2 text-sm leading-6 text-zinc-500">
           <span className="font-semibold text-zinc-700">Nothing has been made and nothing has
