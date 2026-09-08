@@ -50,11 +50,11 @@ export type ScannedAdRow = {
 
 const SYSTEM = `You study advertising formats.
 
-You are given real ads that have been running for at least ninety days and are
-still live. Long run time is the only performance signal Meta publishes for
-commercial ads — no impressions, no spend, no reach — so treat it as the single
-piece of evidence it is: these ads pay for themselves, and something about how
-they are built is doing that work.
+You are given real ads that are still live and have been running for between
+ninety days and one year. Long run time is the only performance signal Meta
+publishes for commercial ads — no impressions, no spend, no reach — so treat it
+as the single piece of evidence it is: these ads pay for themselves, and
+something about how they are built is doing that work.
 
 Your job is to name the SHAPES you can see repeating across them.
 
@@ -106,7 +106,7 @@ export async function extractFormats(input: {
   const db = serviceClient();
   const notes: string[] = [];
 
-  // Qualifying only: active, 90+ days, not badged as a low-impression trickle.
+  // Qualifying only: active, 90–365 days, not badged as a low-impression trickle.
   // The scanner already made that judgement and wrote it onto the row — redoing
   // it here would be a second definition of "winning" that could drift from the
   // one the operator sees on screen.

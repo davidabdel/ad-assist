@@ -1,10 +1,15 @@
 // Meta Ad Library scan.
 //
 // The winning filter is run time, and only run time: currently active AND started
-// 90+ days ago. Meta publishes no impressions, spend or reach for commercial ads —
-// those fields exist only on political and social-issue ads — so there is nothing
-// else in the page to sort on. An ad live a full quarter is live because it pays
-// for itself.
+// between 90 days and one year ago. Meta publishes no impressions, spend or reach
+// for commercial ads — those fields exist only on political and social-issue ads —
+// so there is nothing else in the page to sort on. An ad live a full quarter is
+// live because it pays for itself.
+//
+// The upper bound is there because run time stops being evidence past a point.
+// A first scan surfaced a welding-equipment advertiser 2,596 days in: that is a
+// business that never turns its ad off, not an ad beating the market. Everything
+// past a year is that same shape, so the window closes at 365 days.
 //
 // What leaves this file is raw. The extraction pass that turns it into format specs
 // runs server-side, and IT is what the copywriting prompt sees. Raw ad text must
@@ -173,7 +178,7 @@ async function harvestWhileScrolling(page, { ceiling, onProgress }) {
  * without paying for another scan.
  */
 export async function scanAdLibrary({
-  region, mediaType, term, ceiling = 300, minDays = 90, onProgress,
+  region, mediaType, term, ceiling = 300, minDays = 90, maxDays = 365, onProgress,
 } = {}) {
   const browser = await getBrowser();
   const page = await newPage(browser);
@@ -258,17 +263,30 @@ export async function scanAdLibrary({
         days_running: days,
         variant_count: a.variant_raw
           ? Number(a.variant_raw.replace(/[^0-9]/g, '')) || null : null,
-        // Winning = still running, running a long time, and NOT badged as a
-        // low-impression trickle. Run time alone would rank a 3-year always-on
-        // ad above a genuinely heavy 120-day performer.
-        qualified: Boolean(a.is_active && days != null && days >= minDays
+        // Winning = still running, in the window, and NOT badged as a
+        // low-impression trickle. Both ends of the window matter: below it
+        // there is no evidence yet, above it the ad is furniture. Un-capped run
+        // time would rank a 7-year always-on ad above a genuinely heavy
+        // 120-day performer.
+        qualified: Boolean(a.is_active && days != null
+          && days >= minDays && days <= maxDays
           && !a.low_impressions),
       };
     });
 
     const lowImp = ads.filter((a) => a.low_impressions && a.is_active
-      && a.days_running != null && a.days_running >= minDays).length;
+      && a.days_running != null && a.days_running >= minDays
+      && a.days_running <= maxDays).length;
     if (lowImp) notes.push(`${lowImp} long-running ads excluded: badged low impression count`);
+
+    // Said out loud, because this exclusion throws away ads that look like the
+    // best ones by the only number on the card.
+    const evergreen = ads.filter((a) => a.is_active && a.days_running != null
+      && a.days_running > maxDays).length;
+    if (evergreen) {
+      notes.push(`${evergreen} ads excluded: running longer than ${maxDays} days `
+        + '(always-on, not evidence of a winner)');
+    }
 
     const undated = ads.filter((a) => a.days_running == null).length;
     if (undated) notes.push(`${undated} ads had no readable start date and cannot qualify`);

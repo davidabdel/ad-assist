@@ -11,7 +11,7 @@ const r = await scanAdLibrary({ region, mediaType, term, ceiling: Number(ceiling
 console.log(`\n\n=== ${region} / ${mediaType} / "${term}"  (${((Date.now()-t0)/1000).toFixed(1)}s) ===`);
 console.log('url        :', r.url);
 console.log('found      :', r.found);
-console.log('qualified  :', r.qualified, '(active AND 90+ days)');
+console.log('qualified  :', r.qualified, '(active AND 90–365 days)');
 console.log('notes      :', r.notes.length ? r.notes : 'none');
 const dated = r.ads.filter(a => a.days_running != null).sort((a,b)=>b.days_running-a.days_running);
 console.log('\ntop by run time:');

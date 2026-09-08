@@ -725,10 +725,11 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
           {formats.length} format{formats.length === 1 ? '' : 's'} that keep working
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Read from {scan.adsQualified.toLocaleString()} ads that are still running after 90 days
-          or more. Run time is the only performance signal Meta publishes for commercial ads —
-          no impressions, no spend — so an ad that has been live a full quarter is live because
-          it pays for itself.
+          Read from {scan.adsQualified.toLocaleString()} ads that have been live between three
+          months and a year. Run time is the only performance signal Meta publishes for
+          commercial ads — no impressions, no spend — so an ad that has been live a full quarter
+          is live because it pays for itself. Past a year it is usually just always-on, so those
+          are left out.
         </p>
         <p className="mt-2 text-sm text-zinc-500">
           {/* The rule the whole design rests on, said where the operator can see
@@ -808,7 +809,7 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
         </summary>
         <Card className="mt-3">
           <p className="text-sm text-zinc-500">
-            Every ad here is live now and has been for at least 90 days.
+            Every ad here is live now and has been for between 90 days and a year.
             {scan.adsFound > scan.adsQualified ? (
               <> Another {(scan.adsFound - scan.adsQualified).toLocaleString()} were read and did
                 not make that bar.</>

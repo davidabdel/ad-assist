@@ -91,7 +91,7 @@ export function buildSteps(input: {
   /** Ad-library searches queued for this campaign, and how many have finished. */
   scanJobsTotal: number;
   scanJobsDone: number;
-  /** Ads read, and how many were still running after 90+ days. */
+  /** Ads read, and how many were live between 90 days and a year. */
   adsFound: number;
   adsQualified: number;
   /** Formats written. Zero after a finished scan is a real answer, not a gap. */
@@ -192,7 +192,8 @@ export function buildSteps(input: {
       // only stage besides the first that can be waiting on a sleeping Mac.
       detail: formatCount > 0
         ? `${formatCount} format${formatCount === 1 ? '' : 's'} found across ${adsQualified} ads `
-          + 'that have been running 90 days or more. What was kept is the SHAPE of those ads — '
+          + 'that have been running between three months and a year. What was kept is the '
+          + 'SHAPE of those ads — '
           + 'the hook, the running order, where the offer lands. None of their words travel '
           + 'any further than this screen.'
         : rank >= 8
@@ -202,8 +203,9 @@ export function buildSteps(input: {
             ? `${scanJobsDone} of ${scanJobsTotal} searches done`
               + (adsFound ? `, ${adsFound} ads read so far` : '')
               + '. Chrome is doing this on your Mac, so it has to be awake. Costs nothing.'
-            : 'Reads Meta\'s public ad library for ads still running after 90 days — the only '
-              + 'performance signal Meta publishes — and works out what shape they share. '
+            : 'Reads Meta\'s public ad library for ads live between three months and a year — '
+              + 'run time is the only performance signal Meta publishes — and works out what '
+              + 'shape they share. '
               + 'The searches are ad-copy phrases rather than your product category, because '
               + 'structure is the part of an ad that travels between markets.',
       state: mark(5, rank >= 8, rank === 6 || rank === 7),

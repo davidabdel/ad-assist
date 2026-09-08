@@ -768,7 +768,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const qualified = completed.reduce((n, j) => n + (j.items_qualified ?? 0), 0);
       if (!qualified) {
         return fail(campaign.id, 'The scan finished but not one ad qualified — nothing found '
-          + 'was both still running and 90+ days old. Nothing was extracted rather than '
+          + 'was both still running and between 90 days and a year old. Nothing was '
+          + 'extracted rather than '
           + 'lowering the bar to fill the table.');
       }
 
@@ -777,7 +778,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const scanNotes = completed.flatMap((j) => (j.notes ? [j.notes] : []));
       return {
         status: 'extracting', done: false, waiting: false, terminal: false,
-        did: `Scan finished: ${found} ads read, ${qualified} still running after 90+ days. `
+        did: `Scan finished: ${found} ads read, ${qualified} live between 90 days and a year. `
           + 'Working out what shape they share.',
         notes: [
           ...(failed.length ? [`${failed.length} of ${jobs.length} searches failed; extracting `
