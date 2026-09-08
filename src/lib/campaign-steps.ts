@@ -5,10 +5,10 @@
  * anything the browser remembers. Refresh the page mid-build and it shows the
  * same thing, because the rows that exist ARE the progress.
  *
- * Two of the five steps are marked as not built. That is deliberate: the
- * pipeline genuinely stops after the landing pages, and a progress bar that
- * quietly leaves out the parts that do not exist is how somebody ends up waiting
- * all afternoon for ad ideas that were never coming.
+ * The last step is marked as not built. That is deliberate: the pipeline
+ * genuinely stops after the ad-library scan, and a progress bar that quietly
+ * leaves out the part that does not exist is how somebody ends up waiting all
+ * afternoon for ad ideas that were never coming.
  */
 
 export type StepState = 'todo' | 'active' | 'done' | 'failed' | 'unbuilt';
@@ -29,6 +29,9 @@ const RANK: Record<string, number> = {
   images: 3,
   personas: 4,
   pages_built: 5,
+  scanning: 6,
+  extracting: 7,
+  ideas_ready: 8,
 };
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -39,7 +42,10 @@ export const STATUS_LABEL: Record<string, string> = {
   personas: 'Writing your landing pages',
   // No count here on purpose: the list endpoint does not return one, and a run
   // that stopped short would otherwise be labelled with a number it did not reach.
-  pages_built: 'Finished — pages are live',
+  pages_built: 'Pages are live — starting the ad scan',
+  scanning: 'Reading Meta\'s ad library on your Mac',
+  extracting: 'Working out what the winning ads have in common',
+  ideas_ready: 'Formats found — ad ideas are the next stage',
   failed: 'Stopped with a problem',
 };
 
@@ -82,10 +88,19 @@ export function buildSteps(input: {
   hasImages: boolean;
   /** How many photos ended up on the main page, hero included. */
   imagesPlaced: number;
+  /** Ad-library searches queued for this campaign, and how many have finished. */
+  scanJobsTotal: number;
+  scanJobsDone: number;
+  /** Ads read, and how many were still running after 90+ days. */
+  adsFound: number;
+  adsQualified: number;
+  /** Formats written. Zero after a finished scan is a real answer, not a gap. */
+  formatCount: number;
 }): Step[] {
   const {
     status, hasBrief, personaCount, personaTarget, hasSourceUrl, ingestFailed, ingestDone,
     usesMac, hasBasePage, hasImages, imagesPlaced,
+    scanJobsTotal, scanJobsDone, adsFound, adsQualified, formatCount,
   } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
@@ -94,11 +109,15 @@ export function buildSteps(input: {
   // step that broke is worked out from what actually made it into the database:
   // a brief means the scrape and the summary both landed, and whether a base
   // page exists says which of the two writing steps was in flight.
+  // Checked before the page steps: a campaign that got as far as queueing a
+  // scan has its twenty pages, so blaming the writing stage for a scan that
+  // broke would send the operator to look at pages that are fine.
   const failedAt = !failed ? -1
-    : personaCount > 0 || hasImages ? 4
-      : hasBasePage ? 3
-        : hasBrief ? 2
-          : ingestFailed ? 0 : 1;
+    : scanJobsTotal > 0 ? 5
+      : personaCount > 0 || hasImages ? 4
+        : hasBasePage ? 3
+          : hasBrief ? 2
+            : ingestFailed ? 0 : 1;
 
   const mark = (index: number, done: boolean, active: boolean): StepState => {
     if (failed) {
@@ -168,9 +187,26 @@ export function buildSteps(input: {
     {
       key: 'scan',
       title: 'Studying ads that already work',
-      detail: 'Not built yet. This will read Meta\'s public ad library for ads in your category '
-        + 'that have been running 90 days or more, and work out what shape they share.',
-      state: 'unbuilt',
+      // Four different sentences, because this step has four genuinely different
+      // things to say and the one that matters most is the middle one: it is the
+      // only stage besides the first that can be waiting on a sleeping Mac.
+      detail: formatCount > 0
+        ? `${formatCount} format${formatCount === 1 ? '' : 's'} found across ${adsQualified} ads `
+          + 'that have been running 90 days or more. What was kept is the SHAPE of those ads — '
+          + 'the hook, the running order, where the offer lands. None of their words travel '
+          + 'any further than this screen.'
+        : rank >= 8
+          ? `${adsFound} ads read, but no repeating shape was clear enough to write down. `
+            + 'Left empty rather than filled with a pattern that was not there.'
+          : rank >= 6
+            ? `${scanJobsDone} of ${scanJobsTotal} searches done`
+              + (adsFound ? `, ${adsFound} ads read so far` : '')
+              + '. Chrome is doing this on your Mac, so it has to be awake. Costs nothing.'
+            : 'Reads Meta\'s public ad library for ads still running after 90 days — the only '
+              + 'performance signal Meta publishes — and works out what shape they share. '
+              + 'The searches are ad-copy phrases rather than your product category, because '
+              + 'structure is the part of an ad that travels between markets.',
+      state: mark(5, rank >= 8, rank === 6 || rank === 7),
     },
     {
       key: 'ideas',

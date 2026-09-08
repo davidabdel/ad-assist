@@ -3,6 +3,14 @@ import { serviceClient } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
+type ScanJobRow = {
+  kind: string;
+  status: string;
+  items_found: number | null;
+  items_qualified: number | null;
+  search_terms: string[] | null;
+};
+
 /**
  * Everything a progress screen needs in one call: where the campaign is, what
  * the worker is doing, and the live URLs as they appear. Deliberately does NOT
@@ -20,6 +28,7 @@ export async function GET(
 
     const [
       { data: personas }, { data: base }, { data: jobs }, { data: images }, { data: leads },
+      { data: formats }, { data: ads },
     ] = await Promise.all([
       db.from('personas')
         .select('id, persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count')
@@ -32,7 +41,8 @@ export async function GET(
           + 'testimonials, offer_headline, offer_body, cta_button_text, cta_url')
         .eq('campaign_id', id).maybeSingle(),
       db.from('scanner_jobs')
-        .select('kind, status, attempts, notes, error_message, created_at, completed_at')
+        .select('kind, status, attempts, notes, error_message, created_at, completed_at, '
+          + 'region, media_type, search_terms, items_found, items_qualified')
         .eq('campaign_id', id).order('created_at', { ascending: false }),
       db.from('campaign_images')
         .select('position, source_url, caption, kind, usable')
@@ -44,6 +54,20 @@ export async function GET(
       db.from('leads')
         .select('id, persona_id, name, phone, email, message, created_at')
         .eq('campaign_id', id).order('created_at', { ascending: false }).limit(200),
+      // The output of the scan, and the only part of it the copywriting stage
+      // will ever be allowed to read.
+      db.from('format_specs')
+        .select('id, media_type, format_name, description, hook_pattern, visual_recipe, '
+          + 'offer_placement, observed_count, median_days_running, example_ad_ids')
+        .eq('campaign_id', id).order('observed_count', { ascending: false }),
+      // The ads themselves, for browsing only — David asked to be able to see
+      // what the formats were drawn from. Qualifying ones first and capped:
+      // a scan can hold well over a thousand rows and this response is polled.
+      db.from('scanned_ads')
+        .select('id, meta_ad_id, advertiser_name, region, media_type, days_running, '
+          + 'qualified, variant_count, primary_text, headline, cta_label, landing_url')
+        .eq('campaign_id', id).eq('qualified', true)
+        .order('days_running', { ascending: false, nullsFirst: false }).limit(120),
     ]);
 
     // Named rather than joined, so the screen can say WHICH page produced an
@@ -81,6 +105,28 @@ export async function GET(
         ...l,
         persona_name: l.persona_id ? personaName.get(l.persona_id) ?? null : null,
       })),
+      formats: formats ?? [],
+      // Capped above, so the count has to come from the jobs rather than from
+      // `ads.length` — a list that stops at 120 must not be reported as the
+      // whole scan.
+      ads: ads ?? [],
+      scan: (() => {
+        // Through `unknown`: this client carries no generated schema, so a
+        // select string resolves to the driver's error placeholder rather than
+        // to a row type. Asserted here rather than pretended to be checked.
+        const scanJobs = ((jobs ?? []) as unknown as ScanJobRow[])
+          .filter((j) => j.kind === 'ad_scan');
+        return {
+          jobsTotal: scanJobs.length,
+          jobsDone: scanJobs.filter((j) => j.status === 'completed').length,
+          jobsFailed: scanJobs.filter((j) => j.status === 'failed').length,
+          adsFound: scanJobs.reduce((n, j) => n + (j.items_found ?? 0), 0),
+          adsQualified: scanJobs.reduce((n, j) => n + (j.items_qualified ?? 0), 0),
+          // Deduplicated: the same phrase is searched in several regions, and a
+          // list repeating "shop now" three times reads as a mistake.
+          terms: [...new Set(scanJobs.flatMap((j) => (j.search_terms ?? []) as string[]))],
+        };
+      })(),
     });
   } catch (e) {
     if (e instanceof AuthError) return Response.json({ error: e.message }, { status: e.status });

@@ -10,6 +10,8 @@ import {
   applyImages, libraryForPrompt, planImages, resolveImages,
 } from './images';
 import { generatePersonaBatch, type ExistingPersona } from './personas';
+import { extractFormats } from './formats';
+import { estimatedScanMinutes, MEDIA_TYPES, planScanJobs } from './search-terms';
 import type { BasePage, ProductBrief } from './schemas';
 import type { Reason } from '@/lib/page-data';
 
@@ -81,6 +83,10 @@ type CampaignRow = {
   contact_phone: string | null;
   contact_name: string | null;
   current_offer: string | null;
+  /** 'AU' | 'US' | 'GB' | 'ALL'. Decides how many ad-library scans get queued. */
+  region: string;
+  /** Media types the extraction has run for, empty results included. */
+  formats_extracted: string[] | null;
   status: string;
   base_page_guidance: string | null;
   scraped_data: { raw?: Record<string, unknown>; brief?: ProductBrief } | null;
@@ -664,10 +670,180 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       }
     }
 
-    case 'pages_built':
+    // ── queue the ad-library scan ───────────────────────────────────────
+    //
+    // No approval gate here, unlike the base page. The scan spends nothing,
+    // publishes nothing and changes nothing that is already live — it reads a
+    // public library and writes rows only this dashboard sees. The checkpoint
+    // that matters comes later, at the ideas table, where approving a row is
+    // what starts costing money.
+    case 'pages_built': {
+      const { data: existing } = await db.from('scanner_jobs')
+        .select('id').eq('campaign_id', campaign.id).eq('kind', 'ad_scan')
+        .in('status', ['queued', 'running', 'completed']);
+
+      if (existing?.length) {
+        // Already queued by an earlier call. Move the status without inserting
+        // a second set — six duplicate scans would be an hour of the Mac's time
+        // for rows the unique index would reject anyway.
+        await db.from('campaigns').update({ status: 'scanning' }).eq('id', campaign.id);
+        return {
+          status: 'scanning', done: false, waiting: true, terminal: false,
+          did: `The ad-library scan is already queued (${existing.length} searches). Waiting on the Mac.`,
+        };
+      }
+
+      const plan = planScanJobs({ campaignId: campaign.id, region: campaign.region });
+      const { error } = await db.from('scanner_jobs').insert(plan.map((job) => ({
+        campaign_id: campaign.id,
+        kind: 'ad_scan',
+        region: job.region,
+        media_type: job.mediaType,
+        search_terms: job.searchTerms,
+      })));
+      if (error) return fail(campaign.id, `Could not queue the ad scan: ${error.message}`);
+
+      await db.from('campaigns').update({ status: 'scanning', error_message: null })
+        .eq('id', campaign.id);
+
+      const regions = [...new Set(plan.map((j) => j.region))].join(', ');
       return {
-        status: 'pages_built', done: true, waiting: false, terminal: true,
-        did: 'Pages are built. The ad-library scan is the next stage and is not wired up yet.',
+        status: 'scanning', done: false, waiting: true, terminal: false,
+        did: `Queued ${plan.length} ad-library searches across ${regions}, statics and video. `
+          + `About ${estimatedScanMinutes(plan.length)} minutes of Chrome on your Mac, and it `
+          + 'costs nothing.',
+        notes: [
+          'The searches are ad-copy phrases, not your product category — the point is to '
+          + 'see how winning ads are BUILT, and that travels between categories.',
+          'Your Mac has to be awake and the worker running for this stage.',
+        ],
+      };
+    }
+
+    // ── wait for the scan ───────────────────────────────────────────────
+    case 'scanning': {
+      const { data: jobs } = await db.from('scanner_jobs')
+        .select('id, status, region, media_type, items_found, items_qualified, notes, error_message, attempts')
+        .eq('campaign_id', campaign.id).eq('kind', 'ad_scan');
+
+      if (!jobs?.length) {
+        // Nothing to wait for. Rewind rather than sit here: pages_built queues
+        // the set, and it is idempotent.
+        await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
+        return {
+          status: 'pages_built', done: false, waiting: false, terminal: false,
+          did: 'No scan jobs exist for this campaign. Queueing them.',
+        };
+      }
+
+      const pending = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
+      const failed = jobs.filter((j) => j.status === 'failed');
+      const completed = jobs.filter((j) => j.status === 'completed');
+
+      if (pending.length) {
+        const found = completed.reduce((n, j) => n + (j.items_found ?? 0), 0);
+        return {
+          status: 'scanning', done: false, waiting: true, terminal: false,
+          did: `${completed.length} of ${jobs.length} searches done`
+            + (found ? `, ${found} ads so far` : '')
+            + '. Waiting on Chrome on your Mac.',
+          notes: failed.length
+            ? [`${failed.length} search(es) failed and will not be retried: `
+              + failed.map((j) => j.error_message).filter(Boolean).join(' · ')]
+            : undefined,
+        };
+      }
+
+      // Every job has finished one way or the other. A partial scan still
+      // extracts — three regions' worth of ads is not required to see a shape,
+      // and stopping the campaign because one search hit a consent wall would
+      // throw away work that is already done and already good enough.
+      if (!completed.length) {
+        return fail(campaign.id, 'Every ad-library search failed. '
+          + (failed[0]?.error_message ?? 'No reason was recorded.')
+          + ' The most common cause is that Chrome on the Mac has no signed-in '
+          + 'Facebook session yet.');
+      }
+
+      const qualified = completed.reduce((n, j) => n + (j.items_qualified ?? 0), 0);
+      if (!qualified) {
+        return fail(campaign.id, 'The scan finished but not one ad qualified — nothing found '
+          + 'was both still running and 90+ days old. Nothing was extracted rather than '
+          + 'lowering the bar to fill the table.');
+      }
+
+      await db.from('campaigns').update({ status: 'extracting' }).eq('id', campaign.id);
+      const found = completed.reduce((n, j) => n + (j.items_found ?? 0), 0);
+      const scanNotes = completed.flatMap((j) => (j.notes ? [j.notes] : []));
+      return {
+        status: 'extracting', done: false, waiting: false, terminal: false,
+        did: `Scan finished: ${found} ads read, ${qualified} still running after 90+ days. `
+          + 'Working out what shape they share.',
+        notes: [
+          ...(failed.length ? [`${failed.length} of ${jobs.length} searches failed; extracting `
+            + 'from the rest.'] : []),
+          ...scanNotes,
+        ],
+      };
+    }
+
+    // ── turn the ads into format specs ──────────────────────────────────
+    //
+    // One media type per call. Statics and video are separate crafts and get
+    // separate prompts, and splitting them also keeps each unit well inside the
+    // function's time limit.
+    case 'extracting': {
+      // What has been ATTEMPTED, not what produced rows. "No formats" is a real
+      // answer — too few usable ads to see a pattern — and reading progress off
+      // format_specs instead would make an empty result repeat forever.
+      const attempted = new Set(campaign.formats_extracted ?? []);
+
+      // Which types actually have ads to read. A campaign whose video searches
+      // all failed must not sit here waiting for video formats that cannot come.
+      const { data: scanned } = await db.from('scanned_ads')
+        .select('media_type').eq('campaign_id', campaign.id).eq('qualified', true);
+      const available = new Set((scanned ?? []).map((r) => r.media_type as string));
+
+      const next = MEDIA_TYPES.find((m) => available.has(m) && !attempted.has(m));
+
+      if (next) {
+        let result;
+        try {
+          result = await extractFormats({ campaignId: campaign.id, mediaType: next });
+        } catch (e) {
+          return fail(campaign.id, `Could not work out the ${next} formats: ${(e as Error).message}`);
+        }
+
+        // Marked before anything else, so a crash on the line after this cannot
+        // cause the same extraction to be paid for twice.
+        const { error } = await db.from('campaigns')
+          .update({ formats_extracted: [...attempted, next] }).eq('id', campaign.id);
+        if (error) return fail(campaign.id, `Could not record the extraction: ${error.message}`);
+
+        return {
+          status: 'extracting', done: false, waiting: false, terminal: false,
+          did: result.written
+            ? `Found ${result.written} ${next} format${result.written === 1 ? '' : 's'} `
+              + `across ${result.adsSampled} winning ads.`
+            : `No ${next} formats — not enough usable ads to show a pattern.`,
+          notes: result.notes,
+        };
+      }
+
+      await db.from('campaigns').update({ status: 'ideas_ready' }).eq('id', campaign.id);
+      const { count } = await db.from('format_specs')
+        .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+      return {
+        status: 'ideas_ready', done: true, waiting: false, terminal: true,
+        did: `${count ?? 0} format${count === 1 ? '' : 's'} extracted. Writing the ad ideas is `
+          + 'the next stage and is not wired up yet.',
+      };
+    }
+
+    case 'ideas_ready':
+      return {
+        status: 'ideas_ready', done: true, waiting: false, terminal: true,
+        did: 'Formats are extracted. Writing the ad ideas is the next stage and is not wired up yet.',
       };
 
     case 'failed':

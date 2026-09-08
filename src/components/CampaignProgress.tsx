@@ -38,7 +38,51 @@ type Persona = {
   clicks_count: number;
 };
 
-type Job = { kind: string; status: string; error_message: string | null; notes: string | null };
+type Job = {
+  kind: string; status: string; error_message: string | null; notes: string | null;
+  region: string | null; media_type: string | null; search_terms: string[] | null;
+};
+
+/**
+ * The firewall's output. Everything here describes what an ad DOES; none of it
+ * is what an ad SAYS, which is why this is the only part of the scan that will
+ * be allowed anywhere near the stage that writes copy.
+ */
+type FormatSpec = {
+  id: string;
+  media_type: string;
+  format_name: string;
+  description: string;
+  hook_pattern: string;
+  visual_recipe: string;
+  offer_placement: string | null;
+  observed_count: number;
+  median_days_running: number | null;
+  example_ad_ids: string[];
+};
+
+type ScannedAd = {
+  id: string;
+  meta_ad_id: string;
+  advertiser_name: string | null;
+  region: string;
+  media_type: string;
+  days_running: number | null;
+  variant_count: number | null;
+  primary_text: string | null;
+  headline: string | null;
+  cta_label: string | null;
+  landing_url: string | null;
+};
+
+type ScanSummary = {
+  jobsTotal: number;
+  jobsDone: number;
+  jobsFailed: number;
+  adsFound: number;
+  adsQualified: number;
+  terms: string[];
+};
 
 type Reason = {
   number: number;
@@ -86,6 +130,10 @@ type CampaignView = {
   jobs: Job[];
   /** Enquiries from the public pages. Only ever non-empty on a phone-and-form campaign. */
   leads: Lead[];
+  formats: FormatSpec[];
+  /** Qualifying ads only, longest-running first, capped server-side at 120. */
+  ads: ScannedAd[];
+  scan: ScanSummary;
 };
 
 type Lead = {
@@ -156,7 +204,11 @@ export function CampaignProgress({ id }: { id: string }) {
     (async () => {
       try {
         const first = await refresh();
-        if (first.campaign.status !== 'pages_built' && first.campaign.status !== 'failed') {
+        // `ideas_ready` is where the built pipeline ends, not `pages_built` —
+        // the scan runs on from the pages by itself. Driving a finished campaign
+        // would be harmless but pointless; driving a failed one would hammer a
+        // stage that needs a person.
+        if (first.campaign.status !== 'ideas_ready' && first.campaign.status !== 'failed') {
           await drive();
         }
       } catch (e) {
@@ -206,14 +258,25 @@ export function CampaignProgress({ id }: { id: string }) {
     );
   }
 
-  const { campaign, personas, jobs, base_page: basePage, images, brief, leads } = view;
+  const {
+    campaign, personas, jobs, base_page: basePage, images, brief, leads, formats, ads, scan,
+  } = view;
   const target = campaign.persona_target ?? DEFAULT_PERSONA_TARGET;
   const foundPhotos = brief?.image_urls ?? [];
   const failed = campaign.status === 'failed';
-  const finished = campaign.status === 'pages_built';
+  // Two different endings. The pages going live is what the operator came for
+  // and happens well before the pipeline stops; `finished` is the pipeline.
+  const pagesLive = ['pages_built', 'scanning', 'extracting', 'ideas_ready']
+    .includes(campaign.status);
+  const finished = campaign.status === 'ideas_ready';
   const ingest = jobs.find((j) => j.kind === 'ingest');
-  const waitingOnMac = !failed && !finished
-    && (ingest?.status === 'queued' || ingest?.status === 'running');
+  const scanJobs = jobs.filter((j) => j.kind === 'ad_scan');
+  // Both stages that need the Mac, asked the same way. The ad scan is the one
+  // more likely to be caught out by it: by then the operator has their pages and
+  // has usually stopped watching.
+  const waitingOnIngest = ingest?.status === 'queued' || ingest?.status === 'running';
+  const waitingOnScan = scanJobs.some((j) => j.status === 'queued' || j.status === 'running');
+  const waitingOnMac = !failed && !finished && (waitingOnIngest || waitingOnScan);
   // The gate is open only when the page it is gating actually exists. At
   // `base_review` with no row yet, the page is still being written.
   const awaitingApproval = campaign.status === 'base_review' && Boolean(basePage);
@@ -229,11 +292,16 @@ export function CampaignProgress({ id }: { id: string }) {
     // Reading is finished once the campaign is off `pending` and no Mac job is
     // still outstanding. A job only exists at all when the server could not read
     // the page, so the usual case is "no job, and the read already happened".
-    ingestDone: campaign.status !== 'pending' && !waitingOnMac,
+    ingestDone: campaign.status !== 'pending' && !waitingOnIngest,
     usesMac: Boolean(ingest),
     hasImages: images.length > 0,
     imagesPlaced: (basePage?.reasons ?? []).filter((r) => r.image_url).length
       + (basePage?.hero_image_url ? 1 : 0),
+    scanJobsTotal: scan.jobsTotal,
+    scanJobsDone: scan.jobsDone,
+    adsFound: scan.adsFound,
+    adsQualified: scan.adsQualified,
+    formatCount: formats.length,
   });
 
   return (
@@ -246,8 +314,10 @@ export function CampaignProgress({ id }: { id: string }) {
         </Link>
         <h1 className="mt-3 text-3xl font-bold tracking-tight">{campaign.title}</h1>
         <p className="mt-2 text-zinc-600">
-          {finished ? `Finished. ${personas.length} pages are live.`
+          {finished ? `${personas.length} pages are live, and the ad library has been read.`
             : failed ? 'Stopped. Nothing is lost — see below.'
+              : pagesLive ? `${personas.length} pages are live. Now reading Meta's ad library `
+                + 'to see how ads that survive get built — this part costs nothing.'
               : awaitingApproval ? 'Waiting on you. Read the main page below and approve it.'
                 : running
                   // Said plainly because it is the difference between "come back
@@ -260,17 +330,30 @@ export function CampaignProgress({ id }: { id: string }) {
 
       {waitingOnMac ? (
         <div className="mb-6">
-          <Callout tone="warn" title="This shop needs your Mac">
+          <Callout
+            tone="warn"
+            title={waitingOnScan ? 'The ad scan needs your Mac' : 'This shop needs your Mac'}
+          >
             <p>
-              {/* The job carries the reason the server could not read it. Showing it
-                  is the difference between "something went wrong" and "this shop
-                  blocks robots, which is normal and expected". */}
-              {ingest?.notes?.replace(/^server read failed, handed to the Mac: /, '')
-                ?? 'The page could not be read from the server.'}
+              {waitingOnScan
+                // Not an error, unlike the ingest case. Meta serves the ad
+                // library to a real browser and to nothing else, so this is how
+                // this stage always works — said plainly so it does not read as
+                // something having gone wrong.
+                ? `${scan.jobsDone} of ${scan.jobsTotal} searches done. Meta only shows the ad `
+                  + 'library to a real browser, so Chrome on your Mac is doing the reading.'
+                /* The job carries the reason the server could not read it. Showing it
+                   is the difference between "something went wrong" and "this shop
+                   blocks robots, which is normal and expected". */
+                : ingest?.notes?.replace(/^server read failed, handed to the Mac: /, '')
+                  ?? 'The page could not be read from the server.'}
             </p>
             <p className="mt-2">
-              Almost every shop is read without it, but this one has to be opened in a real
-              browser. Open Terminal, paste this, and leave the window open:
+              {waitingOnScan
+                ? 'Leave the Mac awake and the worker running. If it is not running, open '
+                  + 'Terminal, paste this, and leave the window open:'
+                : 'Almost every shop is read without it, but this one has to be opened in a real '
+                  + 'browser. Open Terminal, paste this, and leave the window open:'}
             </p>
             <pre className="mt-2 overflow-x-auto rounded-md bg-amber-100 px-3 py-2 font-mono text-xs">
               cd ~/.buzz/REPOS/ad-assist/scanner &amp;&amp; npm start
@@ -279,6 +362,14 @@ export function CampaignProgress({ id }: { id: string }) {
               A Chrome window will open by itself. That is meant to happen — leave it alone and
               this screen carries on within a few seconds.
             </p>
+            {waitingOnScan ? (
+              <p className="mt-2">
+                {/* The one failure this stage has that a restart does not fix. Named
+                    here rather than left to be discovered as six failed searches. */}
+                If every search fails, that Chrome needs to be signed in to Facebook once —
+                the ad library asks anonymous visitors to log in.
+              </p>
+            ) : null}
           </Callout>
         </div>
       ) : null}
@@ -332,7 +423,11 @@ export function CampaignProgress({ id }: { id: string }) {
           enquiries are the only thing on this screen worth opening it for. */}
       {leads.length ? <Leads leads={leads} /> : null}
 
-      {finished ? <LivePages campaign={campaign} personas={personas} target={target} /> : null}
+      {formats.length ? <Formats formats={formats} scan={scan} /> : null}
+
+      {ads.length ? <ScannedAds ads={ads} scan={scan} /> : null}
+
+      {pagesLive ? <LivePages campaign={campaign} personas={personas} target={target} /> : null}
 
       {log.length ? (
         <details className="mt-6">
@@ -606,6 +701,168 @@ function BasePageReview({
           </p>
         </div>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * What the scan concluded.
+ *
+ * Formats first and ads second, on purpose. The formats are the deliverable —
+ * they are what the ad-writing stage will be built on — and the ads underneath
+ * are the evidence, there so a claim on this card can be checked against the
+ * thing it came from rather than taken on trust.
+ */
+function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }) {
+  const byMedia = (['image', 'video'] as const)
+    .map((m) => ({ media: m, items: formats.filter((f) => f.media_type === m) }))
+    .filter((g) => g.items.length);
+
+  return (
+    <div className="mt-6">
+      <Card>
+        <h2 className="text-xl font-bold tracking-tight">
+          {formats.length} format{formats.length === 1 ? '' : 's'} that keep working
+        </h2>
+        <p className="mt-1 text-sm text-zinc-500">
+          Read from {scan.adsQualified.toLocaleString()} ads that are still running after 90 days
+          or more. Run time is the only performance signal Meta publishes for commercial ads —
+          no impressions, no spend — so an ad that has been live a full quarter is live because
+          it pays for itself.
+        </p>
+        <p className="mt-2 text-sm text-zinc-500">
+          {/* The rule the whole design rests on, said where the operator can see
+              it, because "you are not copying anyone" is the reassurance this
+              screen most needs to give. */}
+          What was kept is the <span className="font-semibold text-zinc-700">shape</span> of these
+          ads, never their words. Nothing an advertiser wrote travels past this screen.
+        </p>
+
+        {byMedia.map((group) => (
+          <div key={group.media} className="mt-6">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+              {group.media === 'image' ? 'Statics' : 'Video'}
+            </h3>
+            <ul className="mt-3 space-y-4">
+              {group.items.map((f) => (
+                <li key={f.id} className="rounded-xl border border-zinc-200 p-4">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <p className="font-semibold text-zinc-900">{f.format_name}</p>
+                    <p className="text-xs text-zinc-500">
+                      seen in {f.observed_count} ad{f.observed_count === 1 ? '' : 's'}
+                      {f.median_days_running != null
+                        ? ` · running ${f.median_days_running} days on average` : ''}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-sm text-zinc-600">{f.description}</p>
+
+                  <dl className="mt-3 space-y-2 text-sm">
+                    <div>
+                      <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        How it opens
+                      </dt>
+                      <dd className="text-zinc-700">{f.hook_pattern}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        What is on screen
+                      </dt>
+                      <dd className="text-zinc-700">{f.visual_recipe}</dd>
+                    </div>
+                    {f.offer_placement ? (
+                      <div>
+                        <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                          Where the offer sits
+                        </dt>
+                        <dd className="text-zinc-700">{f.offer_placement}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+
+                  {group.media === 'video' ? (
+                    // Stated rather than left as an absence. A blank field reads
+                    // as an oversight; a sentence saying what is missing and why
+                    // reads as a limit, which is what it is.
+                    <p className="mt-3 text-xs text-zinc-400">
+                      Pacing — cut count, shot length, where the hook ends — is not here. Those are
+                      measurements taken from the video file, and nothing downloads the videos yet.
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+/** The evidence underneath the formats. Browsable, deliberately not summarised. */
+function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
+  return (
+    <div className="mt-6">
+      <details className="group">
+        <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+          See the {scan.adsQualified.toLocaleString()} ads these came from
+        </summary>
+        <Card className="mt-3">
+          <p className="text-sm text-zinc-500">
+            Every ad here is live now and has been for at least 90 days.
+            {scan.adsFound > scan.adsQualified ? (
+              <> Another {(scan.adsFound - scan.adsQualified).toLocaleString()} were read and did
+                not make that bar.</>
+            ) : null}
+            {ads.length < scan.adsQualified ? (
+              // Never a silent truncation: a list that stops at 120 while the
+              // heading says 400 has to say which it is showing.
+              <> Showing the {ads.length} longest-running.</>
+            ) : null}
+          </p>
+          {scan.terms.length ? (
+            <p className="mt-2 text-sm text-zinc-500">
+              Searched for: {scan.terms.map((t) => `“${t}”`).join(', ')}. These are phrases that
+              turn up inside direct-response ads whatever they sell — the scan is looking for
+              structure, not for your competitors.
+            </p>
+          ) : null}
+
+          <ul className="mt-5 divide-y divide-zinc-200 border-t border-zinc-200">
+            {ads.map((ad) => (
+              <li key={ad.id} className="py-4">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <p className="font-semibold text-zinc-900">
+                    {ad.advertiser_name ?? 'Advertiser not named on the card'}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    {ad.region} · {ad.media_type === 'image' ? 'static' : 'video'}
+                    {ad.days_running != null ? ` · ${ad.days_running} days` : ''}
+                    {ad.variant_count && ad.variant_count > 1
+                      ? ` · ${ad.variant_count} variants` : ''}
+                  </p>
+                </div>
+                {ad.headline ? (
+                  <p className="mt-1 text-sm font-medium text-zinc-800">{ad.headline}</p>
+                ) : null}
+                {ad.primary_text ? (
+                  <p className="mt-1 line-clamp-3 text-sm text-zinc-600">{ad.primary_text}</p>
+                ) : null}
+                <p className="mt-1 text-xs text-zinc-400">
+                  {ad.cta_label ? `${ad.cta_label} · ` : ''}
+                  <a
+                    href={`https://www.facebook.com/ads/library/?id=${ad.meta_ad_id}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="underline hover:text-zinc-700"
+                  >
+                    See it in Meta&rsquo;s library
+                  </a>
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </details>
     </div>
   );
 }

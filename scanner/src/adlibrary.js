@@ -65,10 +65,22 @@ async function harvestWhileScrolling(page, { ceiling, onProgress }) {
       const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
       const out = [];
       // Library ID is the only stable per-ad anchor in this markup; Meta's class
-      // names are generated and change without notice. Walk up from the leaf that
-      // holds it to the card. The card boundary is obvious by size: a card runs a
-      // few hundred characters, and the next ancestor up is the whole result list
-      // at tens of thousands. So take the LAST ancestor still under 5k.
+      // names are generated and change without notice. Walk up from the leaf
+      // that holds it to the card.
+      //
+      // The boundary is found by COUNTING IDS, not by measuring length. Size
+      // used to decide it — climb while under 5000 characters — and that quietly
+      // threw away exactly the ads worth having. A long-form advertorial ad, the
+      // kind that runs for a year because it works, is around 28,000 characters
+      // in one card. The walk hit the limit at the card itself and kept the
+      // 122-character header instead: an ad with a run time, an ID, and no copy
+      // at all. Only the shortest ads survived, so the sample was biased toward
+      // the ads with the least to teach.
+      //
+      // One card contains exactly one Library ID. The results list contains
+      // thirty. So climb while the count is still one, and stop at the last
+      // ancestor where that holds — a boundary that does not care how much the
+      // advertiser wrote.
       for (const el of document.querySelectorAll('div, span')) {
         const t = el.textContent || '';
         if (!/^\s*Library ID:\s*\d+/.test(t)) continue;
@@ -78,10 +90,14 @@ async function harvestWhileScrolling(page, { ceiling, onProgress }) {
 
         let card = el;
         let node = el;
-        for (let i = 0; i < 14 && node.parentElement; i++) {
+        for (let i = 0; i < 18 && node.parentElement; i++) {
           node = node.parentElement;
-          const len = (node.innerText || '').length;
-          if (len > 5000) break;
+          const text = node.innerText || '';
+          if ((text.match(/Library ID/g) || []).length !== 1) break;
+          // The one case counting alone cannot catch: a search with a single
+          // result, where the surrounding page also holds exactly one ID. The
+          // results header is the marker that we have climbed out of the card.
+          if (/results include ads that match/i.test(text)) break;
           card = node;
         }
 
@@ -175,10 +191,53 @@ export async function scanAdLibrary({
       notes.push('dismissed a consent dialog');
     }
 
-    const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 4000));
-    if (/log in|log into facebook/i.test(bodyText) && !/Library ID/.test(bodyText)) {
-      throw new Error('Ad Library asked for a login — this profile needs a signed-in '
-        + 'Facebook session before scans will run');
+    // WAIT for the first card rather than sampling once at a fixed delay.
+    //
+    // This used to be a single check after 3.5 seconds, and it was wrong in a
+    // way that took a while to see: the Ad Library renders its chrome — nav,
+    // filters, result count — immediately, and fills in the cards a moment
+    // later. The header carries a "Log in" button on every page whether you
+    // need one or not. So a slow render read as "Ad Library asked for a login",
+    // and the suggested fix was to go and sign a browser profile in, which
+    // changes nothing, because the library serves ads to anonymous visitors
+    // perfectly well. Measured on this machine: cards land around 3.5s, but not
+    // reliably by 3.5s.
+    //
+    // A login wall is now only reported when the cards never arrive at all.
+    const deadline = Date.now() + 25_000;
+    let state = null;
+    for (;;) {
+      state = await page.evaluate(() => {
+        const text = document.body.innerText;
+        return {
+          hasCards: /Library ID/.test(text),
+          // Meta says so in as many words when a search genuinely matches
+          // nothing. That is a result, not a failure.
+          empty: /no ads match your search|0 results/i.test(text),
+          login: /log in to continue|you must log in/i.test(text),
+          head: text.slice(0, 500),
+        };
+      });
+      if (state.hasCards || state.empty || Date.now() > deadline) break;
+      await sleep(1000);
+    }
+
+    if (!state.hasCards) {
+      if (state.empty) {
+        // Returned, not thrown. A phrase that matches nothing in one region is
+        // ordinary, and failing the whole job for it would throw away the five
+        // other searches that did find something.
+        notes.push(`no ads matched "${term}" in ${region}`);
+        return {
+          url, region, media_type: mediaType, term,
+          found: 0, qualified: 0, notes, ads: [],
+        };
+      }
+      throw new Error(state.login
+        ? 'The Ad Library demanded a login for this search — this Chrome profile needs a '
+          + 'signed-in Facebook session'
+        : 'No ad cards appeared within 25 seconds. The library was reachable but served '
+          + `nothing readable for "${term}" in ${region}.`);
     }
 
     const raw = await harvestWhileScrolling(page, { ceiling, onProgress });

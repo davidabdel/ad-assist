@@ -212,3 +212,67 @@ export const ImagePlanSchema = z.object({
   })).describe('One entry per reason, in order. Every reason gets an entry, including the -1s.'),
 });
 export type ImagePlan = z.infer<typeof ImagePlanSchema>;
+
+/**
+ * The firewall, as a schema.
+ *
+ * This is the ONLY thing that leaves the scanned ads and travels forward into
+ * the stage that writes David's copy. Every field is a description of SHAPE —
+ * what the ad does and in what order — and none of them is allowed to be the
+ * ad's own words. That distinction is enforced in the field descriptions
+ * because it cannot be enforced by a type: `hook_pattern` is a string either
+ * way, and the difference between "opens by naming a cost the viewer is already
+ * paying" and "Stop wasting $400 a year on razors" is the whole point of the
+ * table.
+ *
+ * `ad_indexes` rather than ids: a model asked for a uuid invents one that
+ * parses. It gets a numbered list and hands back numbers, and the mapping to
+ * real rows happens in `formats.ts` where a bad index can be dropped.
+ */
+export const FormatSpecBatchSchema = z.object({
+  formats: z.array(z.object({
+    format_name: z.string().describe(
+      'A short name for the shape, the way an editor would refer to it: '
+      + '"problem-first testimonial", "side-by-side comparison", "unboxing to '
+      + 'offer". Never the name of a brand in the sample.',
+    ),
+    description: z.string().describe(
+      'Two or three sentences on what this format does and why it holds '
+      + 'attention. Written so somebody could build one without seeing the '
+      + 'examples.',
+    ),
+    hook_pattern: z.string().describe(
+      'What the opening DOES, described as a move rather than quoted. '
+      + '"Names a specific everyday cost, then pauses" — not the sentence '
+      + 'itself. Copying an advertiser\'s words into this field defeats the '
+      + 'purpose of the field.',
+    ),
+    visual_recipe: z.string().describe(
+      'What is on screen, in order, and how it is shot: framing, who is in it, '
+      + 'what changes between the start and the end. Generic to the format, not '
+      + 'a description of one particular ad.',
+    ),
+    offer_placement: z.string().describe(
+      'Where the price, discount or guarantee appears relative to everything '
+      + 'else — "withheld until the last third", "stated in the first line", '
+      + '"never stated, deferred to the landing page". Empty string when the '
+      + 'ads in this format carry no offer at all.',
+    ),
+    ad_indexes: z.array(z.number()).describe(
+      'EVERY ad in the numbered list that follows this format, not just a few '
+      + 'illustrative ones. These numbers decide the format\'s observed count '
+      + 'and its median run time, so a short list understates a real pattern. '
+      + 'An ad belongs to exactly one format: put it under the shape it fits '
+      + 'best rather than listing it twice.',
+    ),
+  })).describe(
+    'One entry per shape you can actually see repeating. Report the patterns '
+    + 'that are there — a format observed once is noise, and inventing a fifth '
+    + 'to round the list out is worse than returning four.',
+  ),
+  unclassified_indexes: z.array(z.number()).describe(
+    'Ads that follow no shape shared with any other ad in the list. Reporting '
+    + 'them is expected and useful; forcing them into a format is not.',
+  ),
+});
+export type FormatSpecBatch = z.infer<typeof FormatSpecBatchSchema>;
