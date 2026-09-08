@@ -8,6 +8,7 @@ import {
   Button, Callout, Card, CopyButton, Field, Shell, inputClass,
 } from '@/components/ui';
 import { buildSteps, DEFAULT_PERSONA_TARGET, type Step, type StepState } from '@/lib/campaign-steps';
+import { CTA_LABELS } from '@/lib/ad-fields';
 
 /**
  * Watches one campaign and drives it.
@@ -134,6 +135,53 @@ type CampaignView = {
   /** Qualifying ads only, longest-running first, capped server-side at 120. */
   ads: ScannedAd[];
   scan: ScanSummary;
+  /** Three ads per buyer, with anything generated from them attached. */
+  ideas: AdIdea[];
+  spend: Spend;
+};
+
+/** What KIE made from an approved idea, once it was approved. */
+type GeneratedAsset = {
+  id: string;
+  state: 'submitted' | 'generating' | 'success' | 'fail';
+  result_url: string | null;
+  /** Our own copy. KIE's link expires; this one does not. */
+  stored_url: string | null;
+  credits_charged: number | null;
+  fail_reason: string | null;
+  kie_task_id: string;
+};
+
+type AdIdea = {
+  id: string;
+  persona_id: string;
+  persona_name: string | null;
+  idea_index: number;
+  media_type: 'image' | 'video';
+  angle: string;
+  hook: string;
+  headline: string;
+  primary_text: string;
+  cta_label: string;
+  visual_concept: string;
+  them_vs_us: { why_this_works?: string } | null;
+  kie_prompt: string | null;
+  video_storyboard: { beats?: { at_second: number; on_screen: string }[] } | null;
+  est_credits: number;
+  est_usd: number | string;
+  destination_url: string;
+  source_image_url: string | null;
+  status: 'draft' | 'approved' | 'generating' | 'generated' | 'failed' | 'rejected';
+  rejected_reason: string | null;
+  edited_at: string | null;
+  generated_assets: GeneratedAsset[];
+};
+
+type Spend = {
+  total: number;
+  ceiling: number;
+  remaining: number;
+  lines: { id: string; usd: number | string; credits: number; note: string | null; created_at: string }[];
 };
 
 type Lead = {
@@ -155,6 +203,12 @@ type AdvanceResult = {
 
 const WAIT_FOR_MAC_MS = 8000;
 const BETWEEN_UNITS_MS = 700;
+/**
+ * How often to ask KIE about a generation in flight. An image takes about a
+ * minute and a ten-second video about three, so ten seconds is responsive
+ * without being a hammer.
+ */
+const ASSET_POLL_MS = 10_000;
 
 export function CampaignProgress({ id }: { id: string }) {
   const { api } = useSession();
@@ -248,6 +302,53 @@ export function CampaignProgress({ id }: { id: string }) {
     [api, id, refresh, drive],
   );
 
+  /**
+   * One row of the ideas table, changed. Every path back from the server ends
+   * in a refresh, so what is on screen after an action is what the database
+   * holds rather than what the browser guessed.
+   */
+  const ideaAction = useCallback(
+    async (ideaId: string, init: RequestInit) => {
+      const result = await api<{ did?: string }>(`/api/campaigns/${id}/ideas/${ideaId}`, init);
+      if (result.did) setLog((l) => [...l, result.did as string].slice(-40));
+      await refresh();
+      return result;
+    },
+    [api, id, refresh],
+  );
+
+  // Something is being made at KIE right now.
+  const inFlight = (view?.ideas ?? []).some(
+    (i) => i.generated_assets.some((a) => a.state === 'submitted' || a.state === 'generating'),
+  );
+
+  /**
+   * Settle finished generations while the screen is open.
+   *
+   * Separate from the pipeline loop on purpose: by the time anything is
+   * generating the pipeline has finished, and approving is a person's act. This
+   * only ever tidies up after one — polling KIE is free, and the download into
+   * our own storage has to happen before KIE's temporary link expires.
+   */
+  useEffect(() => {
+    if (!inFlight) return undefined;
+    let stopped = false;
+    (async () => {
+      while (!stopped) {
+        await sleep(ASSET_POLL_MS);
+        if (stopped) return;
+        try {
+          await api(`/api/campaigns/${id}/assets`, { method: 'POST' });
+          if (!stopped) await refresh();
+        } catch {
+          // Transient. The next tick asks again; nothing is lost by a missed
+          // poll, because the state lives at KIE and in the database.
+        }
+      }
+    })();
+    return () => { stopped = true; };
+  }, [inFlight, api, id, refresh]);
+
   if (!view) {
     return (
       <Shell>
@@ -260,13 +361,14 @@ export function CampaignProgress({ id }: { id: string }) {
 
   const {
     campaign, personas, jobs, base_page: basePage, images, brief, leads, formats, ads, scan,
+    ideas, spend,
   } = view;
   const target = campaign.persona_target ?? DEFAULT_PERSONA_TARGET;
   const foundPhotos = brief?.image_urls ?? [];
   const failed = campaign.status === 'failed';
   // Two different endings. The pages going live is what the operator came for
   // and happens well before the pipeline stops; `finished` is the pipeline.
-  const pagesLive = ['pages_built', 'scanning', 'extracting', 'ideas_ready']
+  const pagesLive = ['pages_built', 'scanning', 'extracting', 'writing_ideas', 'ideas_ready']
     .includes(campaign.status);
   const finished = campaign.status === 'ideas_ready';
   const ingest = jobs.find((j) => j.kind === 'ingest');
@@ -302,6 +404,9 @@ export function CampaignProgress({ id }: { id: string }) {
     adsFound: scan.adsFound,
     adsQualified: scan.adsQualified,
     formatCount: formats.length,
+    ideaCount: ideas.length,
+    buyersWithIdeas: new Set(ideas.map((i) => i.persona_id)).size,
+    ideasGenerated: ideas.filter((i) => i.status === 'generated').length,
   });
 
   return (
@@ -422,6 +527,11 @@ export function CampaignProgress({ id }: { id: string }) {
       {/* Above the page list on purpose: once a vehicle campaign is live, the
           enquiries are the only thing on this screen worth opening it for. */}
       {leads.length ? <Leads leads={leads} /> : null}
+
+      {/* Above the formats, because once the ideas exist they are what the
+          operator opens this screen for. The formats become the evidence
+          underneath them, the same way the ads are evidence for the formats. */}
+      {ideas.length ? <Ideas ideas={ideas} spend={spend} onAction={ideaAction} /> : null}
 
       {formats.length ? <Formats formats={formats} scan={scan} /> : null}
 
@@ -961,10 +1071,11 @@ function LivePages({
         ) : null}
 
         <div className="mt-6">
-          <Callout tone="info" title="What happens next">
-            The ad ideas are the next stage and are not built yet. Until then these pages are
-            the deliverable: they work as ad destinations today, and the view and click counts
-            on each one start counting the moment somebody lands.
+          <Callout tone="info" title="What these are for">
+            Each page is the destination of that buyer&rsquo;s ads — the ideas table above points
+            every one of them here by default. The view and click counts start the moment
+            somebody lands, so the pages tell you which angle is working even before an ad
+            is made.
           </Callout>
         </div>
       </Card>
@@ -972,6 +1083,401 @@ function LivePages({
         Campaign address: <code className="font-mono">/p/{campaign.slug}/…</code>
       </p>
     </div>
+  );
+}
+
+/**
+ * The ideas table — the last screen in the app, and the only one with a button
+ * that spends money.
+ *
+ * Everything about how this reads follows from that. The price is on the button
+ * rather than in a tooltip; what has been spent and what is left sits at the
+ * top rather than at the bottom; and every row says what it will cost BEFORE it
+ * is approved, because the operator is deciding sixty times, not once.
+ *
+ * Editing is inline and covers every field that gets pasted into Ads Manager.
+ * These are not suggestions to be taken or left — they are drafts, and the last
+ * word on the wording belongs to the person whose product it is.
+ */
+function Ideas({
+  ideas, spend, onAction,
+}: {
+  ideas: AdIdea[];
+  spend: Spend;
+  onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }>;
+}) {
+  // Grouped in the order they arrive, which the server has already put in buyer
+  // order. Rebuilding the order here would be a second opinion about it.
+  const groups: { personaId: string; name: string; items: AdIdea[] }[] = [];
+  for (const idea of ideas) {
+    const last = groups[groups.length - 1];
+    if (last && last.personaId === idea.persona_id) last.items.push(idea);
+    else {
+      groups.push({
+        personaId: idea.persona_id,
+        name: idea.persona_name ?? 'a buyer whose page has since gone',
+        items: [idea],
+      });
+    }
+  }
+
+  const waiting = ideas.filter((i) => i.status === 'draft');
+  const made = ideas.filter((i) => i.status === 'generated');
+  const running = ideas.filter((i) => i.status === 'generating' || i.status === 'approved');
+  const outstanding = waiting.reduce((n, i) => n + Number(i.est_usd), 0);
+
+  return (
+    <div className="mt-6">
+      <Card>
+        <h2 className="text-xl font-bold tracking-tight">
+          {ideas.length} ad idea{ideas.length === 1 ? '' : 's'}
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-zinc-500">
+          Three per buyer, each built on one of the formats below and pointing at that
+          buyer&rsquo;s own page. Every field can be rewritten before you approve it — these get
+          pasted into Ads Manager by you, so the wording is yours.
+        </p>
+        <p className="mt-2 text-sm leading-6 text-zinc-500">
+          <span className="font-semibold text-zinc-700">Nothing has been made and nothing has
+            been charged</span>{' '}
+          until you press Approve on a row. That is the only button in this app that spends money.
+        </p>
+
+        <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="Waiting on you" value={String(waiting.length)} />
+          <Stat label="Being made" value={String(running.length)} />
+          <Stat label="Made" value={String(made.length)} />
+          <Stat
+            label="Spent"
+            value={`$${spend.total.toFixed(2)}`}
+            sub={`of $${spend.ceiling.toFixed(2)}`}
+          />
+        </dl>
+
+        {outstanding > spend.remaining ? (
+          <div className="mt-4">
+            <Callout tone="warn" title="Approving everything would pass the ceiling">
+              The {waiting.length} ideas still waiting would cost ${outstanding.toFixed(2)} and
+              there is ${spend.remaining.toFixed(2)} left under the ${spend.ceiling.toFixed(2)}{' '}
+              ceiling. Nothing breaks — approvals are refused once it is reached, one at a time,
+              and nothing is half-charged.
+            </Callout>
+          </div>
+        ) : null}
+      </Card>
+
+      {groups.map((group) => (
+        <div key={group.personaId} className="mt-4">
+          <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            {group.name}
+          </h3>
+          <div className="space-y-3">
+            {group.items.map((idea) => (
+              <IdeaRow key={idea.id} idea={idea} onAction={onAction} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-xl bg-zinc-50 px-4 py-3 ring-1 ring-zinc-200">
+      <dt className="text-xs font-bold uppercase tracking-wide text-zinc-400">{label}</dt>
+      <dd className="mt-0.5 text-lg font-bold text-zinc-900">
+        {value}
+        {sub ? <span className="ml-1 text-sm font-medium text-zinc-400">{sub}</span> : null}
+      </dd>
+    </div>
+  );
+}
+
+const STATUS_PILL: Record<AdIdea['status'], { label: string; className: string }> = {
+  draft: { label: 'Waiting on you', className: 'bg-zinc-100 text-zinc-600' },
+  approved: { label: 'Approved', className: 'bg-blue-100 text-blue-800' },
+  generating: { label: 'Being made', className: 'bg-blue-100 text-blue-800' },
+  generated: { label: 'Made', className: 'bg-emerald-100 text-emerald-800' },
+  failed: { label: 'Failed', className: 'bg-red-100 text-red-800' },
+  rejected: { label: 'Sent back', className: 'bg-amber-100 text-amber-900' },
+};
+
+function IdeaRow({
+  idea, onAction,
+}: { idea: AdIdea; onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }> }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({
+    headline: idea.headline,
+    primary_text: idea.primary_text,
+    cta_label: idea.cta_label,
+    kie_prompt: idea.kie_prompt ?? '',
+    destination_url: idea.destination_url,
+  });
+
+  const asset = idea.generated_assets.find((a) => a.state === 'success')
+    ?? idea.generated_assets[idea.generated_assets.length - 1];
+  const fileUrl = asset?.stored_url ?? asset?.result_url ?? null;
+  const pill = STATUS_PILL[idea.status] ?? STATUS_PILL.draft;
+  const cost = Number(idea.est_usd);
+
+  async function run(label: string, init: RequestInit) {
+    setBusy(label);
+    setError(null);
+    try {
+      await onAction(idea.id, init);
+      setEditing(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const paste = [
+    `Headline: ${idea.headline}`,
+    '',
+    idea.primary_text,
+    '',
+    `Button: ${idea.cta_label}`,
+    `Goes to: ${idea.destination_url}`,
+  ].join('\n');
+
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-md bg-zinc-900 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
+          {idea.media_type === 'image' ? 'Static' : 'Video'}
+        </span>
+        <span className={`rounded-md px-2 py-0.5 text-xs font-bold uppercase tracking-wide ${pill.className}`}>
+          {pill.label}
+        </span>
+        {idea.edited_at ? (
+          <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-zinc-500">
+            Your words
+          </span>
+        ) : null}
+        <span className="ml-auto text-xs text-zinc-400">{idea.angle}</span>
+      </div>
+
+      {editing ? (
+        <div className="mt-4 space-y-4">
+          <Field label="Headline" help="Truncates around 40 characters on a phone.">
+            <input
+              className={inputClass}
+              value={draft.headline}
+              onChange={(e) => setDraft({ ...draft, headline: e.target.value })}
+            />
+          </Field>
+          <Field label="Primary text" help="Everything before the first line break is what shows before “See more”.">
+            <textarea
+              className={inputClass}
+              rows={6}
+              value={draft.primary_text}
+              onChange={(e) => setDraft({ ...draft, primary_text: e.target.value })}
+            />
+          </Field>
+          <Field label="Button" help="Ads Manager only offers these.">
+            <select
+              className={inputClass}
+              value={draft.cta_label}
+              onChange={(e) => setDraft({ ...draft, cta_label: e.target.value })}
+            >
+              {CTA_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field
+            label={idea.media_type === 'image' ? 'Picture instruction' : 'Video instruction'}
+            help={idea.media_type === 'image'
+              ? 'What to change about your photograph. The product itself is never redrawn — it '
+                + 'is a photo of a real thing somebody will be sent.'
+              : 'One continuous ten-second move that starts on your photograph. There is no '
+                + 'cutting, so this is one shot.'}
+          >
+            <textarea
+              className={inputClass}
+              rows={5}
+              value={draft.kie_prompt}
+              onChange={(e) => setDraft({ ...draft, kie_prompt: e.target.value })}
+            />
+          </Field>
+          <Field label="Where the ad goes" help="Their own landing page by default. Change it to send this one ad somewhere else.">
+            <input
+              className={inputClass}
+              value={draft.destination_url}
+              onChange={(e) => setDraft({ ...draft, destination_url: e.target.value })}
+            />
+          </Field>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={busy !== null}
+              onClick={() => run('save', { method: 'PATCH', body: JSON.stringify(draft) })}
+            >
+              {busy === 'save' ? 'Saving…' : 'Save'}
+            </Button>
+            <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-3 text-lg font-bold leading-snug text-zinc-900">{idea.headline}</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-700">
+            {idea.primary_text}
+          </p>
+          <p className="mt-3 text-sm text-zinc-500">
+            Button <span className="font-semibold text-zinc-700">{idea.cta_label}</span> →{' '}
+            <a
+              href={idea.destination_url}
+              target="_blank"
+              rel="noopener"
+              className="break-all underline hover:text-zinc-900"
+            >
+              {idea.destination_url}
+            </a>
+          </p>
+
+          <div className="mt-4 flex items-start gap-4">
+            {idea.source_image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={idea.source_image_url}
+                alt=""
+                loading="lazy"
+                className="size-20 shrink-0 rounded-lg border border-black/10 object-cover"
+              />
+            ) : null}
+            <div className="min-w-0 text-sm leading-6 text-zinc-600">
+              <p>{idea.visual_concept}</p>
+              {!idea.source_image_url ? (
+                <p className="mt-1 text-xs font-semibold text-amber-700">
+                  No photograph was chosen for this one, so it cannot be made until you point it
+                  at one. The words are still usable.
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+              The instruction that makes the {idea.media_type === 'image' ? 'picture' : 'video'}
+            </summary>
+            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
+              {idea.kie_prompt}
+            </p>
+            {idea.video_storyboard?.beats?.length ? (
+              <ul className="mt-2 space-y-1 text-xs text-zinc-500">
+                {idea.video_storyboard.beats.map((b) => (
+                  <li key={`${b.at_second}-${b.on_screen}`}>
+                    <span className="font-mono font-bold text-zinc-400">{b.at_second}s</span>{' '}
+                    {b.on_screen}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {idea.them_vs_us?.why_this_works ? (
+              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                <span className="font-bold uppercase tracking-wide text-zinc-400">Why this one · </span>
+                {idea.them_vs_us.why_this_works}
+              </p>
+            ) : null}
+          </details>
+        </>
+      )}
+
+      {fileUrl && idea.status === 'generated' ? (
+        <div className="mt-4">
+          {idea.media_type === 'image' ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-xl border border-black/10" />
+          ) : (
+            <video src={fileUrl} controls playsInline className="w-full rounded-xl border border-black/10" />
+          )}
+          <p className="mt-2 text-xs text-zinc-400">
+            {asset?.credits_charged != null
+              ? `Charged ${asset.credits_charged} credits.`
+              : 'Charged at the estimate.'}{' '}
+            {asset?.stored_url
+              ? 'Stored in your own bucket, so this link does not expire.'
+              : 'This is KIE\'s temporary link — save the file, it expires in a few days.'}{' '}
+            <a href={fileUrl} download target="_blank" rel="noopener" className="underline hover:text-zinc-700">
+              Download
+            </a>
+          </p>
+        </div>
+      ) : null}
+
+      {idea.status === 'generating' || idea.status === 'approved' ? (
+        <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          Being made now — about {idea.media_type === 'image' ? 'a minute' : 'three minutes'}.
+          This screen checks every ten seconds. Closing the tab does not cancel it; the file is
+          collected next time you open the campaign.
+        </p>
+      ) : null}
+
+      {idea.rejected_reason ? (
+        <p className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {idea.rejected_reason}
+        </p>
+      ) : null}
+
+      {error ? (
+        <div className="mt-4">
+          <Callout tone="error" title="That did not go through">{error}</Callout>
+        </div>
+      ) : null}
+
+      {!editing ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-200 pt-4">
+          {idea.status === 'draft' ? (
+            <>
+              <Button
+                disabled={busy !== null || !idea.source_image_url}
+                onClick={() => run('approve', {
+                  method: 'POST', body: JSON.stringify({ action: 'approve' }),
+                })}
+              >
+                {busy === 'approve' ? 'Submitting…' : `Approve — $${cost.toFixed(2)}`}
+              </Button>
+              <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(true)}>
+                Rewrite it
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy !== null}
+                onClick={() => run('reject', {
+                  method: 'POST', body: JSON.stringify({ action: 'reject' }),
+                })}
+              >
+                Send back
+              </Button>
+            </>
+          ) : null}
+
+          {idea.status === 'rejected' || idea.status === 'failed' ? (
+            <>
+              <Button
+                variant="ghost"
+                disabled={busy !== null}
+                onClick={() => run('reset', {
+                  method: 'POST', body: JSON.stringify({ action: 'reset' }),
+                })}
+              >
+                {busy === 'reset' ? 'Putting it back…' : 'Put it back'}
+              </Button>
+              <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(true)}>
+                Rewrite it
+              </Button>
+            </>
+          ) : null}
+
+          <CopyButton text={paste} label="Copy for Ads Manager" />
+        </div>
+      ) : null}
+    </Card>
   );
 }
 

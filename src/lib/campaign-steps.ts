@@ -5,10 +5,12 @@
  * anything the browser remembers. Refresh the page mid-build and it shows the
  * same thing, because the rows that exist ARE the progress.
  *
- * The last step is marked as not built. That is deliberate: the pipeline
- * genuinely stops after the ad-library scan, and a progress bar that quietly
- * leaves out the part that does not exist is how somebody ends up waiting all
- * afternoon for ad ideas that were never coming.
+ * Every step here is now built. The last one used to be marked `unbuilt`
+ * because the pipeline genuinely stopped after the ad-library scan, and a
+ * progress bar that quietly leaves out the part that does not exist is how
+ * somebody ends up waiting all afternoon for ad ideas that were never coming.
+ * The state is kept in the type: it is the honest way to describe a stage that
+ * does not exist yet, and there will be another one.
  */
 
 export type StepState = 'todo' | 'active' | 'done' | 'failed' | 'unbuilt';
@@ -31,7 +33,8 @@ const RANK: Record<string, number> = {
   pages_built: 5,
   scanning: 6,
   extracting: 7,
-  ideas_ready: 8,
+  writing_ideas: 8,
+  ideas_ready: 9,
 };
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -45,7 +48,8 @@ export const STATUS_LABEL: Record<string, string> = {
   pages_built: 'Pages are live — starting the ad scan',
   scanning: 'Reading Meta\'s ad library on your Mac',
   extracting: 'Working out what the winning ads have in common',
-  ideas_ready: 'Formats found — ad ideas are the next stage',
+  writing_ideas: 'Writing your ad ideas',
+  ideas_ready: 'Your ad ideas are waiting for you',
   failed: 'Stopped with a problem',
 };
 
@@ -96,11 +100,17 @@ export function buildSteps(input: {
   adsQualified: number;
   /** Formats written. Zero after a finished scan is a real answer, not a gap. */
   formatCount: number;
+  /** Ad ideas written, and how many buyers already have theirs. */
+  ideaCount: number;
+  buyersWithIdeas: number;
+  /** Ideas that have been approved and paid for, however they ended up. */
+  ideasGenerated: number;
 }): Step[] {
   const {
     status, hasBrief, personaCount, personaTarget, hasSourceUrl, ingestFailed, ingestDone,
     usesMac, hasBasePage, hasImages, imagesPlaced,
     scanJobsTotal, scanJobsDone, adsFound, adsQualified, formatCount,
+    ideaCount, buyersWithIdeas, ideasGenerated,
   } = input;
   const failed = status === 'failed';
   const rank = RANK[status] ?? (failed ? -1 : 0);
@@ -112,12 +122,18 @@ export function buildSteps(input: {
   // Checked before the page steps: a campaign that got as far as queueing a
   // scan has its twenty pages, so blaming the writing stage for a scan that
   // broke would send the operator to look at pages that are fine.
+  //
+  // One known limit: a campaign that failed on the FIRST buyer's ad ideas has
+  // no ideas rows yet, so it is attributed to the scan step. The error message
+  // above the steps names the buyer it stopped on, which is the signal that
+  // actually locates it — this row of bullets is the coarse version.
   const failedAt = !failed ? -1
-    : scanJobsTotal > 0 ? 5
-      : personaCount > 0 || hasImages ? 4
-        : hasBasePage ? 3
-          : hasBrief ? 2
-            : ingestFailed ? 0 : 1;
+    : ideaCount > 0 ? 6
+      : scanJobsTotal > 0 ? 5
+        : personaCount > 0 || hasImages ? 4
+          : hasBasePage ? 3
+            : hasBrief ? 2
+              : ingestFailed ? 0 : 1;
 
   const mark = (index: number, done: boolean, active: boolean): StepState => {
     if (failed) {
@@ -213,9 +229,21 @@ export function buildSteps(input: {
     {
       key: 'ideas',
       title: 'Writing your ad ideas',
-      detail: 'Not built yet. This will write three ad ideas per buyer into a table, and nothing '
-        + 'gets made or charged until you approve a row.',
-      state: 'unbuilt',
+      // The sentence that has to survive every version of this step: nothing is
+      // charged until a row is approved. It is the one thing an operator needs
+      // to be sure of before they let the screen run unattended.
+      detail: ideaCount > 0
+        ? `${ideaCount} ideas across ${buyersWithIdeas} buyer${buyersWithIdeas === 1 ? '' : 's'}`
+          + (buyersWithIdeas < personaCount ? ` of ${personaCount}` : '')
+          + '. Each one is built on one of the formats above, written for that buyer, pointing '
+          + 'at that buyer\'s page. '
+          + (ideasGenerated > 0
+            ? `${ideasGenerated} approved and made.`
+            : 'Nothing has been generated and nothing has been charged.')
+        : 'Three ads per buyer — the headline, the body, the button, the picture prompt and '
+          + 'where it points. Every field is editable, and nothing is made or charged until you '
+          + 'approve a row.',
+      state: mark(6, rank >= 9 && ideaCount > 0, rank === 8),
     },
   ];
 }

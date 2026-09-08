@@ -1,0 +1,15 @@
+-- A campaign now has a stage between "formats extracted" and "ideas waiting
+-- for you", and `ideas_ready` finally means what its name says.
+--
+-- Until now `ideas_ready` was where the built pipeline stopped: it meant
+-- "formats are extracted and the next stage does not exist". With the idea
+-- writer built, the honest reading of that name is "the ideas are ready", so
+-- the working state needs its own value rather than borrowing the finished one.
+--
+-- Campaigns already sitting at `ideas_ready` with no ad_ideas rows are handled
+-- in advance(), which rewinds them here rather than showing an empty table.
+--
+-- ADD VALUE lives alone in this file for the same reason it did in 0006:
+-- Postgres will not let a new enum value be USED in the transaction that added
+-- it, and the migration runner sends one file per request.
+alter type campaign_status add value if not exists 'writing_ideas' before 'ideas_ready';

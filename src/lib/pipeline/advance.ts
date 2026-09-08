@@ -11,6 +11,10 @@ import {
 } from './images';
 import { generatePersonaBatch, type ExistingPersona } from './personas';
 import { extractFormats } from './formats';
+import {
+  generateIdeasForPersona, planIdeas,
+  type FormatForPrompt, type ImageForPrompt, type PersonaForPrompt,
+} from './ideas';
 import { estimatedScanMinutes, MEDIA_TYPES, planScanJobs } from './search-terms';
 import type { BasePage, ProductBrief } from './schemas';
 import type { Reason } from '@/lib/page-data';
@@ -87,6 +91,8 @@ type CampaignRow = {
   region: string;
   /** Media types the extraction has run for, empty results included. */
   formats_extracted: string[] | null;
+  /** How many of a buyer's three ideas are statics and how many are video. */
+  media_split: { static?: number; video?: number } | null;
   status: string;
   base_page_guidance: string | null;
   scraped_data: { raw?: Record<string, unknown>; brief?: ProductBrief } | null;
@@ -831,21 +837,178 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         };
       }
 
-      await db.from('campaigns').update({ status: 'ideas_ready' }).eq('id', campaign.id);
       const { count } = await db.from('format_specs')
         .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+
+      // No formats at all is the one result that cannot go forward. Every idea
+      // is built on an observed shape; with none observed, this stage would be
+      // a copywriter with no brief pretending to have one.
+      if (!count) {
+        return fail(campaign.id, 'The scan produced no formats at all, so there is nothing for '
+          + 'the ad ideas to be built on. Run the scan again — a wider region, or all three — '
+          + 'rather than writing ideas from nothing.');
+      }
+
+      await db.from('campaigns').update({ status: 'writing_ideas' }).eq('id', campaign.id);
       return {
-        status: 'ideas_ready', done: true, waiting: false, terminal: true,
-        did: `${count ?? 0} format${count === 1 ? '' : 's'} extracted. Writing the ad ideas is `
-          + 'the next stage and is not wired up yet.',
+        status: 'writing_ideas', done: false, waiting: false, terminal: false,
+        did: `${count} format${count === 1 ? '' : 's'} extracted. Writing the ad ideas.`,
       };
     }
 
-    case 'ideas_ready':
+    // ── write the ad ideas ──────────────────────────────────────────────
+    //
+    // ONE BUYER PER CALL. Same shape as the persona batches and for the same
+    // reasons: it finishes well inside a function's life, a failure costs one
+    // buyer rather than twenty, and "this persona has ideas or it does not" is
+    // the whole of the progress state.
+    //
+    // Nothing here spends money. Ideas are text; the first charge is the
+    // operator clicking Approve on a row.
+    case 'writing_ideas': {
+      const { data: personaData } = await db.from('personas')
+        .select('id, persona_index, slug, persona_name, primary_pain_point, core_desire, '
+          + 'angle_hook, custom_hero_headline, custom_reasons')
+        .eq('campaign_id', campaign.id).order('persona_index');
+
+      // Through `unknown`, as everywhere else in this file: the client carries
+      // no generated schema, so a select string resolves to the driver's error
+      // placeholder rather than to a row type. Asserted rather than pretended
+      // to be checked.
+      const personas = (personaData ?? []) as unknown as (PersonaForPrompt & { slug: string })[];
+      if (!personas.length) {
+        return fail(campaign.id, 'There are no landing pages to write ads for.');
+      }
+
+      const { data: existing } = await db.from('ad_ideas')
+        .select('persona_id').eq('campaign_id', campaign.id);
+      const done = new Set(
+        ((existing ?? []) as unknown as { persona_id: string }[]).map((r) => r.persona_id),
+      );
+
+      const next = personas.find((p) => !done.has(p.id));
+      if (!next) {
+        await db.from('campaigns').update({ status: 'ideas_ready' }).eq('id', campaign.id);
+        const { count: ideaCount } = await db.from('ad_ideas')
+          .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+        return {
+          status: 'ideas_ready', done: true, waiting: false, terminal: true,
+          did: `${ideaCount ?? 0} ad ideas written across ${personas.length} buyers. `
+            + 'Nothing has been generated and nothing has been charged — that starts when you '
+            + 'approve a row.',
+        };
+      }
+
+      const { data: formats } = await db.from('format_specs')
+        .select('id, media_type, format_name, description, hook_pattern, visual_recipe, '
+          + 'offer_placement, observed_count, median_days_running')
+        .eq('campaign_id', campaign.id).order('observed_count', { ascending: false });
+      const formatRows = (formats ?? []) as unknown as FormatForPrompt[];
+
+      const { plan, note } = planIdeas({
+        split: campaign.media_split,
+        hasImageFormats: formatRows.some((f) => f.media_type === 'image'),
+        hasVideoFormats: formatRows.some((f) => f.media_type === 'video'),
+      });
+      if (!plan.length) {
+        return fail(campaign.id, note ?? 'There are no formats to build ad ideas on.');
+      }
+
+      const brief = campaign.scraped_data?.brief;
+      if (!brief) return fail(campaign.id, 'The product brief is missing, so no ad can be written.');
+
+      // Usable photographs only. A wordmark or a banner is not something an ad
+      // can be built out of, and the picture stage already made that judgement.
+      const { data: images } = await db.from('campaign_images')
+        .select('position, source_url, caption')
+        .eq('campaign_id', campaign.id).eq('usable', true).order('position');
+
+      // The same per-campaign driver lock the persona batches use. Two tabs are
+      // two drivers, both would read "this persona has no ideas", and the loser
+      // would pay for a generation the unique index then rejects.
+      const { data: gotLock } = await db.rpc('claim_persona_batch', { p_campaign: campaign.id });
+      if (!gotLock) {
+        return {
+          status: 'writing_ideas', done: false, waiting: true, terminal: false,
+          did: 'Another tab is writing this campaign\'s ideas. Waiting for it rather than '
+            + 'writing them twice.',
+        };
+      }
+
+      // An ad's destination has to be an absolute URL — Meta will not accept a
+      // path, and a relative one written into sixty rows is sixty ads pointing
+      // nowhere. Better to stop here than to write them.
+      const site = (process.env.NEXT_PUBLIC_SITE_URL ?? '').replace(/\/$/, '');
+      if (!/^https?:\/\//.test(site)) {
+        return fail(campaign.id, 'NEXT_PUBLIC_SITE_URL is not set to a full address, so the ad '
+          + 'ideas have nowhere to point. Every ad\'s destination is that buyer\'s live page, '
+          + 'and Meta will not take a relative link.');
+      }
+      try {
+        const result = await generateIdeasForPersona({
+          campaignId: campaign.id,
+          productType: campaign.product_type,
+          brief,
+          persona: next,
+          formats: formatRows,
+          images: (images ?? []) as unknown as ImageForPrompt[],
+          plan,
+          // The buyer's own page. This is the reason the pages exist: one ad,
+          // one buyer, one destination written for them. Editable per row on
+          // the table for anyone who wants to send a particular ad elsewhere.
+          destinationUrl: `${site}/p/${campaign.slug}/${next.slug}`,
+          currentOffer: campaign.current_offer,
+        });
+
+        if (!result.rows.length) {
+          return fail(campaign.id, `No usable ad ideas came back for ${next.persona_name}: `
+            + (result.rejected.map((r) => r.reason).join('; ') || 'the model returned nothing.'));
+        }
+
+        // ignoreDuplicates rather than a plain insert: the lock above is the
+        // real guard, but it expires, and a slow driver coming back to life
+        // must not kill a campaign on a unique-key violation.
+        const { error } = await db.from('ad_ideas')
+          .upsert(result.rows, { onConflict: 'persona_id,idea_index', ignoreDuplicates: true });
+        if (error) return fail(campaign.id, `Could not save the ad ideas: ${error.message}`);
+
+        const written = personas.filter((p) => done.has(p.id)).length + 1;
+        return {
+          status: 'writing_ideas', done: false, waiting: false, terminal: false,
+          did: `${result.rows.length} ad ideas for ${next.persona_name} `
+            + `(${written} of ${personas.length} buyers).`,
+          notes: [
+            ...(note ? [note] : []),
+            ...result.rejected.map((r) => `Idea ${r.idea_index} was dropped: ${r.reason}`),
+          ],
+        };
+      } catch (e) {
+        return fail(campaign.id, `Could not write the ideas for ${next.persona_name}: `
+          + (e as Error).message);
+      } finally {
+        await db.rpc('release_persona_batch', { p_campaign: campaign.id });
+      }
+    }
+
+    case 'ideas_ready': {
+      // A campaign that reached here before this stage existed has no ideas at
+      // all. Rewind rather than show an empty table: `writing_ideas` is
+      // idempotent and will fill it in.
+      const { count } = await db.from('ad_ideas')
+        .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+      if (!count) {
+        await db.from('campaigns').update({ status: 'writing_ideas' }).eq('id', campaign.id);
+        return {
+          status: 'writing_ideas', done: false, waiting: false, terminal: false,
+          did: 'This campaign finished before the ad ideas stage existed. Writing them now.',
+        };
+      }
       return {
         status: 'ideas_ready', done: true, waiting: false, terminal: true,
-        did: 'Formats are extracted. Writing the ad ideas is the next stage and is not wired up yet.',
+        did: `${count} ad ideas are waiting for you. Nothing is generated or charged until you `
+          + 'approve a row.',
       };
+    }
 
     case 'failed':
       return {
