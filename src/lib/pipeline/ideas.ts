@@ -2,6 +2,7 @@ import { generate } from '@/lib/llm';
 import { COPY_RULES, type ProductType } from '@/lib/product-type';
 import { imageCost, VIDEO_SECONDS, videoCost } from '@/lib/kie';
 import { AdIdeaBatchSchema, type AdIdeaDraft, type ProductBrief } from './schemas';
+import { guidanceBlock } from './guidance';
 
 /**
  * Stage 4 — three ad ideas per buyer.
@@ -189,6 +190,8 @@ export async function generateIdeasForPersona(input: {
   destinationUrl: string;
   /** What the offer bar says, if anything. Real offers only — never invented. */
   currentOffer: string | null;
+  /** What the operator said was wrong with the last set of ideas. */
+  guidance?: string | null;
 }): Promise<IdeaBatchResult> {
   const { plan } = input;
   if (!plan.length) return { rows: [], rejected: [] };
@@ -229,7 +232,8 @@ export async function generateIdeasForPersona(input: {
       + `WRITE ${plan.length} IDEAS, in this exact order:\n${order}\n\n`
       + 'Each one builds on a different format where the list allows it. Fill '
       + 'image_prompt for a static and leave video_prompt and storyboard_beats empty; '
-      + 'fill video_prompt and storyboard_beats for a video and leave image_prompt empty.',
+      + 'fill video_prompt and storyboard_beats for a video and leave image_prompt empty.'
+      + guidanceBlock(input.guidance),
     schema: AdIdeaBatchSchema,
     maxTokens: 12000,
   });

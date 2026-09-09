@@ -1,6 +1,7 @@
 import { generate } from '@/lib/llm';
 import { BRIEF_RULES, type ProductType } from '@/lib/product-type';
 import { ProductBriefSchema, type ProductBrief } from './schemas';
+import { guidanceBlock } from './guidance';
 
 /**
  * Stage 1b — raw scrape into a fixed product brief.
@@ -45,6 +46,13 @@ export type BriefExtra = {
   productType?: ProductType;
   checkoutUrl?: string | null;
   currentOffer?: string | null;
+  /**
+   * What the operator said was wrong with the last summary. Everything after
+   * this stage is written from the brief, so a fault here — the wrong price,
+   * a subscription read as a one-off, a feature that belongs to a different
+   * variant — is the one worth being able to correct by hand.
+   */
+  guidance?: string | null;
 };
 
 export async function buildProductBrief(
@@ -64,7 +72,8 @@ export async function buildProductBrief(
   const { data, usage } = await generate({
     system: rules ? `${SYSTEM}\n\n${rules}` : SYSTEM,
     cachedContext: `SOURCE SCRAPE\n---\n${context}\n---`,
-    prompt: 'Produce the product brief from the source above.',
+    prompt: 'Produce the product brief from the source above.'
+      + guidanceBlock(extra.guidance),
     schema: ProductBriefSchema,
     // Extraction, not invention — the reasoning here is shallow by design.
     effort: 'medium',

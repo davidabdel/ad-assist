@@ -30,8 +30,15 @@ export async function GET(
       { data: personas }, { data: base }, { data: jobs }, { data: images }, { data: leads },
       { data: formats }, { data: ads }, { data: ideas }, { data: spend }, { data: settings },
     ] = await Promise.all([
+      // Superseded pages are returned too, flagged rather than filtered. They
+      // are still live on the web and still the destination of ads that have
+      // been paid for, so a screen that hid them would be hiding traffic the
+      // operator is responsible for. The dashboard groups them separately.
       db.from('personas')
-        .select('id, persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count')
+        // One literal string, not a concatenation: the driver infers the row
+        // type by parsing this at compile time and a joined expression resolves
+        // to its error placeholder instead.
+        .select('id, persona_index, slug, persona_name, angle_hook, primary_pain_point, views_count, clicks_count, superseded_at')
         .eq('campaign_id', id).order('persona_index'),
       // The whole page, not a summary: the approval checkpoint is the operator
       // reading what will be copied onto twenty pages, and it has to be readable
@@ -109,6 +116,10 @@ export async function GET(
         error_message: campaign.error_message,
         has_brief: Boolean(campaign.scraped_data?.brief),
         base_page_guidance: campaign.base_page_guidance,
+        // The note left on each step, so a step that has been sent back before
+        // opens showing what was said rather than an empty box. A correction
+        // the operator cannot see is one they write again.
+        step_guidance: campaign.step_guidance ?? {},
       },
       brief: campaign.scraped_data?.brief ?? null,
       base_page: base ?? null,

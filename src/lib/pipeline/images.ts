@@ -2,6 +2,7 @@ import { generate } from '@/lib/llm';
 import { ImagePlanSchema, type ImagePlan, type ProductBrief } from './schemas';
 import { asDataUrl } from './image-bytes';
 import type { Reason } from '@/lib/page-data';
+import { guidanceBlock } from './guidance';
 
 /**
  * Stage 2c — pictures, after the words are approved.
@@ -81,6 +82,8 @@ export async function planImages(
   brief: ProductBrief,
   reasons: Reason[],
   imageUrls: string[],
+  /** What the operator said was wrong with the last set of choices. */
+  guidance: string | null = null,
 ): Promise<ImagePlanResult> {
   const urls = imageUrls.slice(0, MAX_IMAGES);
 
@@ -113,7 +116,8 @@ export async function planImages(
       + 'always consecutive, because a photo that could not be downloaded is '
       + 'skipped and keeps its number.\n\n'
       + 'Caption all of them, pick the hero, and fill the slots below.\n\n'
-      + `THE PAGE'S ${reasons.length} SLOTS\n---\n${slotList(reasons)}\n---`,
+      + `THE PAGE'S ${reasons.length} SLOTS\n---\n${slotList(reasons)}\n---`
+      + guidanceBlock(guidance),
     images: readable.map((i) => i.dataUrl),
     schema: ImagePlanSchema,
     maxTokens: 8000,

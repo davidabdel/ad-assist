@@ -18,6 +18,7 @@ import {
 import { estimatedScanMinutes, MEDIA_TYPES, planScanJobs } from './search-terms';
 import type { BasePage, ProductBrief } from './schemas';
 import type { Reason } from '@/lib/page-data';
+import { noteForStep } from './guidance';
 
 /**
  * The pipeline driver. One call does ONE unit of work and returns.
@@ -95,6 +96,12 @@ type CampaignRow = {
   media_split: { static?: number; video?: number } | null;
   status: string;
   base_page_guidance: string | null;
+  /**
+   * What the operator said was wrong with a step, keyed by the step key the
+   * progress screen uses. Folded into that stage's prompt on every run of it
+   * from now on, not only the next one. See lib/pipeline/redo.ts.
+   */
+  step_guidance: Record<string, string> | null;
   scraped_data: { raw?: Record<string, unknown>; brief?: ProductBrief } | null;
   brand: BrandKit | null;
 };
@@ -263,6 +270,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           productType: campaign.product_type,
           checkoutUrl: campaign.checkout_url,
           currentOffer: campaign.current_offer,
+          guidance: noteForStep(campaign, 'brief'),
         };
         const result = raw
           ? await buildProductBrief(raw, extra)
@@ -450,7 +458,9 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const reasons = basePage.reasons as Reason[];
       let resolved;
       try {
-        const { plan, unreadable } = await planImages(brief, reasons, urls);
+        const { plan, unreadable } = await planImages(
+          brief, reasons, urls, noteForStep(campaign, 'images'),
+        );
         resolved = resolveImages(plan, urls, unreadable);
       } catch (e) {
         return fail(campaign.id, `Could not choose the pictures: ${(e as Error).message}`);
@@ -528,10 +538,23 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       try {
         // Read under the claim, not before it: a count taken outside the lock is
         // the stale read this whole mechanism exists to prevent.
+        // Live pages only. A superseded page is one a redo replaced but could
+        // not delete because a finished ad points at its URL — it is history,
+        // not part of this campaign's twenty, and counting it here would make
+        // the run believe it had already written pages it is about to write.
         const { data: existingRows } = await db.from('personas')
           .select('persona_index, persona_name, primary_pain_point, slug')
-          .eq('campaign_id', campaign.id).order('persona_index');
+          .eq('campaign_id', campaign.id).is('superseded_at', null)
+          .order('persona_index');
         const existing: ExistingPersona[] = existingRows ?? [];
+
+        // Slugs are the exception, and they are read across ALL pages including
+        // superseded ones. A slug is the page's public address; two rows
+        // sharing one would make /p/<campaign>/<slug> ambiguous, and the row
+        // that lost is the one a live ad is pointing at.
+        const { data: allSlugRows } = await db.from('personas')
+          .select('slug').eq('campaign_id', campaign.id);
+        const takenSlugs = new Set((allSlugRows ?? []).map((r) => r.slug as string));
 
         // The persona call is text-only and batched, so it can never see a
         // photograph. Captions written by the image stage are the whole of what
@@ -587,7 +610,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
             };
             batch = await generatePersonaBatch(
               brief, forPrompt, existing, want, libraryForPrompt(library),
-              campaign.product_type, target,
+              campaign.product_type, target, noteForStep(campaign, 'pages'),
             );
           } catch (e) {
             return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
@@ -614,10 +637,17 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
               return image;
             };
             const hero = pick(p.hero_image_index);
+            // Suffix rather than reject: the model cannot see superseded pages
+            // and has no way to avoid their slugs, so a collision is its fault
+            // in name only. `-2`, then `-3`, so the address stays readable.
+            let slug = p.slug;
+            for (let n = 2; takenSlugs.has(slug); n += 1) slug = `${p.slug}-${n}`;
+            takenSlugs.add(slug);
+
             return {
               campaign_id: campaign.id,
               persona_index: nextIndex + i,
-              slug: p.slug,
+              slug,
               persona_name: p.persona_name,
               primary_pain_point: p.primary_pain_point,
               core_desire: p.core_desire,
@@ -869,7 +899,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       const { data: personaData } = await db.from('personas')
         .select('id, persona_index, slug, persona_name, primary_pain_point, core_desire, '
           + 'angle_hook, custom_hero_headline, custom_reasons')
-        .eq('campaign_id', campaign.id).order('persona_index');
+        .eq('campaign_id', campaign.id).is('superseded_at', null)
+        .order('persona_index');
 
       // Through `unknown`, as everywhere else in this file: the client carries
       // no generated schema, so a select string resolves to the driver's error
@@ -880,8 +911,11 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         return fail(campaign.id, 'There are no landing pages to write ads for.');
       }
 
+      // Live ideas only, for the same reason as the pages above: a buyer whose
+      // only ideas were superseded by a redo has none, and has to be written
+      // again. Counting the superseded ones would skip that buyer forever.
       const { data: existing } = await db.from('ad_ideas')
-        .select('persona_id').eq('campaign_id', campaign.id);
+        .select('persona_id').eq('campaign_id', campaign.id).is('superseded_at', null);
       const done = new Set(
         ((existing ?? []) as unknown as { persona_id: string }[]).map((r) => r.persona_id),
       );
@@ -890,7 +924,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       if (!next) {
         await db.from('campaigns').update({ status: 'ideas_ready' }).eq('id', campaign.id);
         const { count: ideaCount } = await db.from('ad_ideas')
-          .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', campaign.id).is('superseded_at', null);
         return {
           status: 'ideas_ready', done: true, waiting: false, terminal: true,
           did: `${ideaCount ?? 0} ad ideas written across ${personas.length} buyers. `
@@ -958,6 +993,7 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           // the table for anyone who wants to send a particular ad elsewhere.
           destinationUrl: `${site}/p/${campaign.slug}/${next.slug}`,
           currentOffer: campaign.current_offer,
+          guidance: noteForStep(campaign, 'ideas'),
         });
 
         if (!result.rows.length) {
@@ -968,8 +1004,17 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         // ignoreDuplicates rather than a plain insert: the lock above is the
         // real guard, but it expires, and a slow driver coming back to life
         // must not kill a campaign on a unique-key violation.
+        // No named conflict target. Since 0016 the unique key on (persona_id,
+        // idea_index) is a PARTIAL index — it applies to live rows only, so a
+        // superseded attempt 1 does not stop the replacement being called 1 —
+        // and Postgres will not accept a partial index as an arbiter unless the
+        // predicate is named too, which PostgREST cannot express. A bare ON
+        // CONFLICT DO NOTHING is legal against any index and absorbs a superset
+        // of what the named target did, which is the right direction for a
+        // guard whose whole job is to swallow a duplicate from a driver that
+        // woke up after its lock expired.
         const { error } = await db.from('ad_ideas')
-          .upsert(result.rows, { onConflict: 'persona_id,idea_index', ignoreDuplicates: true });
+          .upsert(result.rows, { ignoreDuplicates: true });
         if (error) return fail(campaign.id, `Could not save the ad ideas: ${error.message}`);
 
         const written = personas.filter((p) => done.has(p.id)).length + 1;
@@ -995,7 +1040,8 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       // all. Rewind rather than show an empty table: `writing_ideas` is
       // idempotent and will fill it in.
       const { count } = await db.from('ad_ideas')
-        .select('id', { count: 'exact', head: true }).eq('campaign_id', campaign.id);
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaign.id).is('superseded_at', null);
       if (!count) {
         await db.from('campaigns').update({ status: 'writing_ideas' }).eq('id', campaign.id);
         return {

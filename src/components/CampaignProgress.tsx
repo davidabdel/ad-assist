@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { TopBar } from '@/components/Authed';
 import { useSession } from '@/components/Session';
@@ -30,6 +30,7 @@ import { CTA_LABELS } from '@/lib/ad-fields';
  */
 
 type Persona = {
+  id: string;
   persona_index: number;
   slug: string;
   persona_name: string;
@@ -37,6 +38,12 @@ type Persona = {
   url: string;
   views_count: number;
   clicks_count: number;
+  /**
+   * Set when a redo replaced this page but could not delete it, because ads
+   * that have been paid for point at its URL. It is still live and still taking
+   * traffic, so it is shown rather than hidden — just not counted.
+   */
+  superseded_at: string | null;
 };
 
 type Job = {
@@ -93,6 +100,21 @@ type Reason = {
   image_url?: string | null;
 };
 type Testimonial = { quote: string; reviewer?: string | null; rating?: number | null };
+
+type ProductBrief = {
+  brand_name: string;
+  product_name: string;
+  category: string;
+  one_line_summary: string;
+  features: { feature: string; practical_benefit: string }[];
+  price: { amount: number; currency: string; offer_structure: string };
+  top_objections: string[];
+  top_desires: string[];
+  review_snippets: { quote: string; reviewer: string; rating: number }[];
+  image_urls: string[];
+  /** What the source did not say. Written by the stage, not by a failure. */
+  gaps: string[];
+};
 type CampaignImage = {
   position: number;
   source_url: string;
@@ -118,6 +140,8 @@ type CampaignView = {
     id: string; title: string; slug: string; status: string;
     source_url: string | null; error_message: string | null; has_brief: boolean;
     base_page_guidance: string | null;
+    /** The note left on each step, keyed by step key. */
+    step_guidance: Record<string, string>;
     /** How many pages this one is writing — five for a vehicle, twenty otherwise. */
     persona_target: number | null;
     contact_phone: string | null;
@@ -125,8 +149,13 @@ type CampaignView = {
   base_page: BasePageView | null;
   /** Chosen photos. Empty until the picture stage runs, which is after approval. */
   images: CampaignImage[];
-  /** Every photo the ingest found, chosen or not. Available from the brief onwards. */
-  brief: { image_urls?: string[] } | null;
+  /**
+   * The summary every later stage is written from. Was typed as its image list
+   * alone, because nothing on screen showed any other field — which was the
+   * problem: it is the artefact a mistake propagates furthest from, and it had
+   * never once been visible.
+   */
+  brief: ProductBrief | null;
   personas: Persona[];
   jobs: Job[];
   /** Enquiries from the public pages. Only ever non-empty on a phone-and-form campaign. */
@@ -204,6 +233,16 @@ type Lead = {
   created_at: string;
   /** Which of the pages they were reading. Null if that page has since gone. */
   persona_name: string | null;
+};
+
+/** What the server says a redo of a step would do. Built into the dialog. */
+type RedoEffects = {
+  step: string;
+  rebuilds: string[];
+  keptAds: number;
+  keptPages: number;
+  minutes: string;
+  trivial: boolean;
 };
 
 type AdvanceResult = {
@@ -328,6 +367,34 @@ export function CampaignProgress({ id }: { id: string }) {
     [api, id, refresh],
   );
 
+  /**
+   * Send one step back to be done again.
+   *
+   * Nothing here drives the pipeline. The route rewinds the campaign and
+   * returns; the loop below picks it up on its next tick and rebuilds through
+   * the same stage code that built it the first time. `drive()` is called
+   * afterwards only because the loop may have already stopped — a finished
+   * campaign is not being driven, and a redo has to start it moving again.
+   */
+  const redoStep = useCallback(
+    async (step: string, note: string) => {
+      const result = await api<{ did: string }>(`/api/campaigns/${id}/steps/${step}`, {
+        method: 'POST',
+        body: JSON.stringify({ note }),
+      });
+      setLog((l) => [...l, result.did].slice(-40));
+      await refresh();
+      await drive();
+    },
+    [api, id, refresh, drive],
+  );
+
+  /** What a redo of this step would rewrite, read fresh for the confirm dialog. */
+  const previewRedo = useCallback(
+    (step: string) => api<RedoEffects>(`/api/campaigns/${id}/steps/${step}`),
+    [api, id],
+  );
+
   // Something is being made at KIE right now.
   const inFlight = (view?.ideas ?? []).some(
     (i) => i.generated_assets.some((a) => a.state === 'submitted' || a.state === 'generating'),
@@ -374,6 +441,12 @@ export function CampaignProgress({ id }: { id: string }) {
     ideas, spend,
   } = view;
   const target = campaign.persona_target ?? DEFAULT_PERSONA_TARGET;
+  // A superseded page is one a redo replaced but could not delete, because ads
+  // that have been paid for land on it. It is not one of this campaign's twenty
+  // and must not be counted as one — but it is still live, still taking
+  // traffic, and is listed separately rather than hidden.
+  const livePersonas = personas.filter((p) => !p.superseded_at);
+  const oldPersonas = personas.filter((p) => p.superseded_at);
   const foundPhotos = brief?.image_urls ?? [];
   const failed = campaign.status === 'failed';
   // Two different endings. The pages going live is what the operator came for
@@ -397,7 +470,7 @@ export function CampaignProgress({ id }: { id: string }) {
     status: campaign.status,
     hasBrief: campaign.has_brief,
     hasBasePage: Boolean(basePage),
-    personaCount: personas.length,
+    personaCount: livePersonas.length,
     personaTarget: target,
     hasSourceUrl: Boolean(campaign.source_url),
     ingestFailed: ingest?.status === 'failed',
@@ -430,9 +503,9 @@ export function CampaignProgress({ id }: { id: string }) {
         </Link>
         <h1 className="mt-4 text-5xl font-bold">{campaign.title}</h1>
         <p className="mt-3 text-lg leading-relaxed text-zinc-500">
-          {finished ? `${personas.length} pages are live, and the ad library has been read.`
+          {finished ? `${livePersonas.length} pages are live, and the ad library has been read.`
             : failed ? 'Stopped. Nothing is lost — see below.'
-              : pagesLive ? `${personas.length} pages are live. Now reading Meta's ad library `
+              : pagesLive ? `${livePersonas.length} pages are live. Now reading Meta's ad library `
                 + 'to see how ads that survive get built — this part costs nothing.'
               : awaitingApproval ? 'Waiting on you. Read the main page below and approve it.'
                 : running
@@ -523,7 +596,19 @@ export function CampaignProgress({ id }: { id: string }) {
           marker on each row. */}
       <Card className="py-2 sm:py-3">
         <ol>
-          {steps.map((step) => <StepRow key={step.key} step={step} spinning={running} />)}
+          {steps.map((step) => (
+            <StepRow
+              key={step.key}
+              step={step}
+              spinning={running}
+              view={view}
+              live={livePersonas}
+              superseded={oldPersonas}
+              busy={running || retrying}
+              onPreview={previewRedo}
+              onRedo={redoStep}
+            />
+          ))}
         </ol>
       </Card>
 
@@ -551,7 +636,7 @@ export function CampaignProgress({ id }: { id: string }) {
 
       {ads.length ? <ScannedAds ads={ads} scan={scan} /> : null}
 
-      {pagesLive ? <LivePages campaign={campaign} personas={personas} target={target} /> : null}
+      {pagesLive ? <LivePages campaign={campaign} personas={livePersonas} target={target} /> : null}
 
       {log.length ? (
         <details className="mt-6">
@@ -567,26 +652,495 @@ export function CampaignProgress({ id }: { id: string }) {
   );
 }
 
-function StepRow({ step, spinning }: { step: Step; spinning: boolean }) {
+/**
+ * A step of the checklist, and — once it has run — a door into it.
+ *
+ * The row used to be a tick and two sentences. That was enough while the only
+ * thing an operator could do about a step was watch it, but it left five of the
+ * seven stages with no way to see what they actually produced and no way to
+ * correct them: a summary that read $40 for a $40-a-month product, or a picture
+ * stage that chose four shots of the packaging, could only be fixed by throwing
+ * the campaign away and starting again.
+ *
+ * So a finished step opens. Inside is what it made, in the plainest form that
+ * is still the real thing rather than a description of it, a box to say what is
+ * wrong with it, and one button to have it done again.
+ *
+ * THE ROW IS CLOSED BY DEFAULT AND THAT IS THE POINT. Seven open panels is not
+ * a progress screen. What is on screen when you arrive is still the seven-line
+ * answer to "where is it up to".
+ */
+function StepRow({
+  step, spinning, view, live, superseded, busy, onPreview, onRedo,
+}: {
+  step: Step;
+  spinning: boolean;
+  view: CampaignView;
+  live: Persona[];
+  superseded: Persona[];
+  /** The pipeline is mid-unit. A redo is refused while it is, so say so early. */
+  busy: boolean;
+  onPreview: (step: string) => Promise<RedoEffects>;
+  onRedo: (step: string, note: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  // Only a step that has actually produced something can be opened or sent
+  // back. Before that there is nothing to look at, and "do it again" would mean
+  // "do it", which the screen is already doing.
+  const openable = step.state === 'done' || step.state === 'failed';
+
   return (
-    <li className="flex gap-4 border-t-2 border-zinc-900 py-4 first:border-t-0">
-      <Bullet state={step.state} spinning={spinning} />
-      <div className="min-w-0">
-        <p className={`font-display text-lg font-semibold tracking-[-0.02em] ${
-          step.state === 'unbuilt' ? 'text-zinc-400'
-            : step.state === 'failed' ? 'text-red-700' : 'text-zinc-900'
-        }`}
-        >
-          {step.title}
-          {step.state === 'unbuilt'
-            ? <span className="ml-2 align-middle text-xs font-bold uppercase tracking-wide text-zinc-400">Not built yet</span>
-            : null}
-        </p>
-        <p className={`mt-1 text-sm leading-6 ${step.state === 'unbuilt' ? 'text-zinc-400' : 'text-zinc-500'}`}>
-          {step.detail}
-        </p>
+    <li className="border-t-2 border-zinc-900 first:border-t-0">
+      <div className="flex gap-4 py-4">
+        <Bullet state={step.state} spinning={spinning} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-4">
+            <p className={`font-display text-lg font-semibold tracking-[-0.02em] ${
+              step.state === 'unbuilt' ? 'text-zinc-400'
+                : step.state === 'failed' ? 'text-red-700' : 'text-zinc-900'
+            }`}
+            >
+              {step.title}
+              {step.state === 'unbuilt'
+                ? <span className="ml-2 align-middle text-xs font-bold uppercase tracking-wide text-zinc-400">Not built yet</span>
+                : null}
+            </p>
+            {openable ? (
+              <button
+                type="button"
+                onClick={() => setOpen((o) => !o)}
+                className="shrink-0 text-sm font-semibold text-accent underline underline-offset-4"
+              >
+                {open ? 'Close' : 'Open'}
+              </button>
+            ) : null}
+          </div>
+          <p className={`mt-1 text-sm leading-6 ${step.state === 'unbuilt' ? 'text-zinc-400' : 'text-zinc-500'}`}>
+            {step.detail}
+          </p>
+          {!open && view.campaign.step_guidance?.[step.key] ? (
+            // Visible closed, because a note that only exists behind a click is
+            // one the operator writes a second time.
+            <p className="mt-2 text-sm text-zinc-500">
+              <span className="font-semibold text-zinc-900">Your note:</span>{' '}
+              {view.campaign.step_guidance[step.key]}
+            </p>
+          ) : null}
+        </div>
       </div>
+
+      {open ? (
+        <div className="mb-5 ml-10 border-l-2 border-zinc-200 pl-5">
+          <StepOutput step={step.key} view={view} live={live} superseded={superseded} />
+          <RedoBox
+            stepKey={step.key}
+            lastNote={step.key === 'base'
+              ? view.campaign.base_page_guidance
+              : view.campaign.step_guidance?.[step.key] ?? null}
+            busy={busy}
+            onPreview={onPreview}
+            onRedo={onRedo}
+          />
+        </div>
+      ) : null}
     </li>
+  );
+}
+
+/**
+ * What the step actually produced.
+ *
+ * Every one of these renders a real artefact rather than a count of it. A line
+ * saying "20 pages written" is what the closed row already says; the reason to
+ * open it is to read the words that went onto them.
+ */
+function StepOutput({
+  step, view, live, superseded,
+}: { step: string; view: CampaignView; live: Persona[]; superseded: Persona[] }) {
+  const { campaign, brief, base_page: basePage, images, formats, scan, ideas, jobs } = view;
+
+  if (step === 'read') {
+    const ingest = jobs.find((j) => j.kind === 'ingest');
+    return (
+      <Panel>
+        <Detail label="Read from">
+          {campaign.source_url
+            ? <a href={campaign.source_url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-4">{campaign.source_url}</a>
+            : 'What you typed in, rather than a web page.'}
+        </Detail>
+        <Detail label="How">
+          {ingest
+            ? 'A real Chrome window on your Mac — this shop refuses a plain request.'
+            : 'Straight off the page from the server. No browser, nothing running on your machine.'}
+        </Detail>
+        <Detail label="Photographs found">{brief?.image_urls?.length ?? 0}</Detail>
+        <Detail label="Customer reviews found">{brief?.review_snippets?.length ?? 0}</Detail>
+        {ingest?.notes ? <Detail label="Note from the read">{ingest.notes}</Detail> : null}
+        {/* Said rather than quietly omitted: the raw read is genuinely not on
+            this screen, and an operator hunting for it should be told why
+            instead of concluding the step did nothing. */}
+        <p className="mt-3 text-sm leading-6 text-zinc-500">
+          The page itself is not shown here — it is up to a few hundred KB of raw
+          markup and would drown everything else. What it came to is the summary
+          in the next step, which is the thing worth checking.
+        </p>
+      </Panel>
+    );
+  }
+
+  if (step === 'brief') {
+    if (!brief) return <Empty>No summary has been written yet.</Empty>;
+    return (
+      <Panel>
+        <Detail label="Product">{brief.brand_name ? `${brief.brand_name} — ` : ''}{brief.product_name}</Detail>
+        <Detail label="In one line">{brief.one_line_summary}</Detail>
+        <Detail label="Price">
+          {brief.price?.amount
+            ? `${brief.price.currency || ''} ${brief.price.amount}`.trim()
+            : 'The page never said.'}
+          {brief.price?.offer_structure ? ` — ${brief.price.offer_structure}` : ''}
+        </Detail>
+        <Detail label={`Features (${brief.features?.length ?? 0})`}>
+          <ul className="space-y-1">
+            {(brief.features ?? []).map((f) => (
+              <li key={f.feature}>
+                <span className="font-semibold text-zinc-900">{f.feature}</span> — {f.practical_benefit}
+              </li>
+            ))}
+          </ul>
+        </Detail>
+        {brief.top_objections?.length ? (
+          <Detail label="What makes a buyer hesitate">{brief.top_objections.join(' · ')}</Detail>
+        ) : null}
+        {brief.top_desires?.length ? (
+          <Detail label="What buyers say they wanted">{brief.top_desires.join(' · ')}</Detail>
+        ) : null}
+        <Detail label={`Real review quotes (${brief.review_snippets?.length ?? 0})`}>
+          {brief.review_snippets?.length ? (
+            <ul className="space-y-1">
+              {brief.review_snippets.slice(0, 8).map((r) => (
+                <li key={r.quote}>“{r.quote}”{r.reviewer ? ` — ${r.reviewer}` : ''}</li>
+              ))}
+            </ul>
+          ) : 'None found. Every page ships without testimonials rather than with invented ones.'}
+        </Detail>
+        {brief.gaps?.length ? (
+          // The stage's own account of what it could not find. Surfacing it is
+          // most of the value of opening this step at all — it is where a wrong
+          // summary says so itself.
+          <Detail label="What the page never said">
+            <ul className="space-y-1">
+              {brief.gaps.map((g) => <li key={g}>· {g}</li>)}
+            </ul>
+          </Detail>
+        ) : null}
+      </Panel>
+    );
+  }
+
+  if (step === 'base') {
+    if (!basePage) return <Empty>The main page has not been written yet.</Empty>;
+    return (
+      <Panel>
+        <Detail label="Headline">{basePage.hero_headline}</Detail>
+        {basePage.hero_subheadline ? <Detail label="Under it">{basePage.hero_subheadline}</Detail> : null}
+        <Detail label={`Reasons (${basePage.reasons?.length ?? 0})`}>
+          <ol className="space-y-2">
+            {(basePage.reasons ?? []).map((r) => (
+              <li key={r.number}>
+                <span className="font-semibold text-zinc-900">{r.number}. {r.title}</span>
+                <br />
+                {r.body}
+                {r.image_url ? null : (
+                  <span className="text-zinc-400"> · no picture — none of your photos genuinely showed this</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </Detail>
+        <Detail label="The offer">{basePage.offer_headline}{basePage.offer_body ? ` — ${basePage.offer_body}` : ''}</Detail>
+        <Detail label="Button">{basePage.cta_button_text} → {basePage.cta_url}</Detail>
+      </Panel>
+    );
+  }
+
+  if (step === 'images') {
+    if (!images.length) return <Empty>No photographs have been chosen yet.</Empty>;
+    const placed = new Set([
+      basePage?.hero_image_url,
+      ...(basePage?.reasons ?? []).map((r) => r.image_url),
+    ].filter(Boolean) as string[]);
+    return (
+      <Panel>
+        {/* The caption is the point of this panel, not the thumbnail. It is the
+            only thing the stage that writes the pages ever sees of a photo, so
+            a wrong caption is how a picture ends up on the wrong reason. */}
+        <p className="mb-3 text-sm leading-6 text-zinc-500">
+          What it wrote about each photo is all the later stages ever see of it — they
+          are text-only calls and never look at a picture. A caption that is wrong is
+          how a photo ends up against the wrong reason.
+        </p>
+        <ul className="space-y-3">
+          {images.map((img) => (
+            <li key={img.position} className="flex gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img.source_url} alt="" className="size-16 shrink-0 object-cover" />
+              <div className="min-w-0 text-sm">
+                <p className="text-zinc-900">{img.caption || <span className="text-zinc-400">no caption written</span>}</p>
+                <p className="mt-0.5 text-zinc-500">
+                  #{img.position} · {img.kind}
+                  {img.usable ? '' : ' · not usable as editorial'}
+                  {placed.has(img.source_url) ? ' · on the main page' : ''}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Panel>
+    );
+  }
+
+  if (step === 'pages') {
+    if (!live.length && !superseded.length) return <Empty>No landing pages have been written yet.</Empty>;
+    return (
+      <Panel>
+        <ul className="space-y-2">
+          {live.map((p) => (
+            <li key={p.id} className="text-sm">
+              <a href={p.url} target="_blank" rel="noreferrer" className="font-semibold text-accent underline underline-offset-4">
+                {p.persona_index}. {p.persona_name}
+              </a>
+              <br />
+              <span className="text-zinc-500">{p.angle_hook}</span>
+            </li>
+          ))}
+        </ul>
+        {superseded.length ? (
+          // Never hidden. These pages are still on the web and still the
+          // destination of ads that have been paid for; an operator who cannot
+          // see them cannot know what their traffic is landing on.
+          <div className="mt-4 border-t-2 border-zinc-200 pt-3">
+            <p className="text-sm font-semibold text-zinc-900">
+              {superseded.length} older page{superseded.length === 1 ? '' : 's'}, still live
+            </p>
+            <p className="mt-1 text-sm leading-6 text-zinc-500">
+              Kept because finished ads point at them. Taking them down would turn a
+              running ad into a 404. They are not counted in the {live.length} above.
+            </p>
+            <ul className="mt-2 space-y-1 text-sm">
+              {superseded.map((p) => (
+                <li key={p.id}>
+                  <a href={p.url} target="_blank" rel="noreferrer" className="text-zinc-500 underline underline-offset-4">
+                    {p.persona_name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </Panel>
+    );
+  }
+
+  if (step === 'scan') {
+    if (!formats.length) {
+      return (
+        <Empty>
+          {scan.jobsDone
+            ? `${scan.adsFound} ads were read, but no repeating shape was clear enough to write `
+              + 'down. Left empty rather than filled with a pattern that was not there.'
+            : 'The ad library has not been read yet.'}
+        </Empty>
+      );
+    }
+    return (
+      <Panel>
+        <Detail label="Searched for">{scan.terms.join(' · ')}</Detail>
+        <Detail label="Read">
+          {scan.adsFound} ads, {scan.adsQualified} of them running between three months and a year
+        </Detail>
+        <Detail label={`Shapes kept (${formats.length})`}>
+          <ul className="space-y-2">
+            {formats.map((f) => (
+              <li key={f.id}>
+                <span className="font-semibold text-zinc-900">{f.format_name}</span>
+                <span className="text-zinc-500"> · {f.media_type} · seen in {f.observed_count}</span>
+                <br />
+                {f.description}
+              </li>
+            ))}
+          </ul>
+        </Detail>
+      </Panel>
+    );
+  }
+
+  if (step === 'ideas') {
+    if (!ideas.length) return <Empty>No ad ideas have been written yet.</Empty>;
+    const made = ideas.filter((i) => i.status === 'generated').length;
+    return (
+      <Panel>
+        <Detail label="Written">{ideas.length} ideas</Detail>
+        <Detail label="Made">{made ? `${made} approved and generated` : 'None yet — nothing has been charged.'}</Detail>
+        <p className="mt-3 text-sm leading-6 text-zinc-500">
+          Every one of them, with its words and its picture instruction, is in the table
+          further down this page. That is where a single ad is edited, approved or sent
+          back — this button rewrites all of them.
+        </p>
+      </Panel>
+    );
+  }
+
+  return null;
+}
+
+function Panel({ children }: { children: ReactNode }) {
+  return <div className="mb-4 text-sm leading-6 text-zinc-600">{children}</div>;
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <p className="mb-4 text-sm leading-6 text-zinc-400">{children}</p>;
+}
+
+/** Named Detail, not Field: `Field` is the form control in lib/ui. */
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="mt-3 first:mt-0">
+      <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">{label}</p>
+      <div className="mt-0.5 text-zinc-600">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The note, and the button that spends it.
+ *
+ * TWO CLICKS, ALWAYS, and the second one is not the same word as the first.
+ * Sending a step back throws away everything written from it, and on the lower
+ * steps that is twenty live pages. The confirm is not a formality — it is read
+ * from the server at the moment it opens, so what it lists is what will
+ * actually happen rather than what this component guessed.
+ */
+function RedoBox({
+  stepKey, lastNote, busy, onPreview, onRedo,
+}: {
+  stepKey: string;
+  lastNote: string | null;
+  busy: boolean;
+  onPreview: (step: string) => Promise<RedoEffects>;
+  onRedo: (step: string, note: string) => Promise<void>;
+}) {
+  const [note, setNote] = useState(lastNote ?? '');
+  const [effects, setEffects] = useState<RedoEffects | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The one step with no instruction behind it. Saying so is better than a box
+  // that quietly does nothing with what is typed into it.
+  const hasPrompt = stepKey !== 'read';
+
+  async function check() {
+    setChecking(true);
+    setError(null);
+    try {
+      setEffects(await onPreview(stepKey));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function go() {
+    setWorking(true);
+    setError(null);
+    try {
+      await onRedo(stepKey, note);
+      setEffects(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="border-t-2 border-zinc-200 pt-4">
+      {hasPrompt ? (
+        <>
+          <label htmlFor={`note-${stepKey}`} className="text-xs font-bold uppercase tracking-wide text-zinc-400">
+            What is wrong with it
+          </label>
+          <textarea
+            id={`note-${stepKey}`}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            maxLength={2000}
+            placeholder="Plain English. “The price is $40 a month, not $40.” “Stop choosing the packaging shots.”"
+            className="mt-1 w-full border-2 border-zinc-900 p-3 text-sm leading-6 outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-sm leading-6 text-zinc-500">
+            This is added to the instruction behind this step, and stays on it — every
+            future run of this step gets it too, not just the next one. Leave it empty
+            to clear it and get a plain re-roll.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm leading-6 text-zinc-500">
+          There is no instruction behind this step — it is a download, not a piece of
+          writing, so there is nothing a note could change. If what came back is wrong,
+          send back the summary underneath it instead.
+        </p>
+      )}
+
+      {error ? <p className="mt-3 text-sm font-semibold text-red-700">{error}</p> : null}
+
+      {effects ? (
+        <div className="mt-4 border-2 border-zinc-900 p-4">
+          <p className="font-display text-base font-semibold text-zinc-900">
+            This will throw away and rebuild:
+          </p>
+          <ul className="mt-2 space-y-1 text-sm leading-6 text-zinc-600">
+            {effects.rebuilds.map((r) => <li key={r}>· {r}</li>)}
+          </ul>
+          {effects.keptAds ? (
+            <p className="mt-3 text-sm leading-6 text-zinc-600">
+              <span className="font-semibold text-zinc-900">
+                Nothing you have paid for is deleted.
+              </span>{' '}
+              {effects.keptAds} finished ad{effects.keptAds === 1 ? '' : 's'} stay
+              {effects.keptAds === 1 ? 's' : ''} exactly where {effects.keptAds === 1 ? 'it is' : 'they are'},
+              marked as made from an older version
+              {effects.keptPages
+                ? `, and the ${effects.keptPages} page${effects.keptPages === 1 ? '' : 's'} `
+                  + `${effects.keptPages === 1 ? 'it points' : 'they point'} at stay live so no `
+                  + 'running ad lands on a dead link'
+                : ''}.
+            </p>
+          ) : null}
+          <p className="mt-3 text-sm leading-6 text-zinc-600">
+            Takes {effects.minutes}. It costs tokens and nothing else — no ad is
+            generated and nothing is charged until you approve a row in the ideas table.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button onClick={go} disabled={working}>
+              {working ? 'Sending it back…' : 'Yes, do it again'}
+            </Button>
+            <Button variant="ghost" onClick={() => setEffects(null)} disabled={working}>
+              Leave it alone
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3">
+          <Button variant="ghost" onClick={check} disabled={busy || checking}>
+            {checking ? 'Checking…' : busy ? 'Wait for it to stop first' : 'Do this step again'}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1183,6 +1737,38 @@ function Ideas({
             </Callout>
           </div>
         ) : null}
+
+        {/* Collapsed, because it is a reference rather than a step: you want it the
+            first time you paste a row into Ads Manager and never again. Built by
+            scripts/build-ad-field-map.py. */}
+        <details className="mt-5">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+            Which field is which in Ads Manager
+          </summary>
+          <p className="mt-2 text-sm leading-6 text-zinc-500">
+            A real ad with every slot labelled. The two things worth knowing before you paste:
+            the whole block above the picture is <span className="font-semibold text-zinc-700">one
+            field</span>, and Meta&rsquo;s description line{' '}
+            <span className="font-semibold text-zinc-700">is not written here</span> — leave it
+            empty or write your own.
+          </p>
+          {/* Opens full size in a tab: the key under the ad is small at this width,
+              and the whole point of the panel is being able to read it. */}
+          <a href="/ad-field-map.png" target="_blank" rel="noopener" className="mt-3 block">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/ad-field-map.png"
+              alt="A Facebook ad with its primary text, picture, display link, headline,
+                description and button each boxed and numbered, and a key explaining which part of
+                an ad idea fills each one."
+              width={974}
+              height={1292}
+              loading="lazy"
+              className="w-full max-w-[640px] rounded-[var(--radius-brand-card)] border border-black/10"
+            />
+            <span className="mt-1 block text-xs text-zinc-400">Open full size</span>
+          </a>
+        </details>
       </Card>
 
       {groups.map((group) => (

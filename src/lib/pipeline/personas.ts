@@ -2,6 +2,7 @@ import { generate } from '@/lib/llm';
 import { normalisePainPoint, uniqueSlug } from '@/lib/slug';
 import { COPY_RULES, PERSONA_RULES, type ProductType } from '@/lib/product-type';
 import { PersonaBatchSchema, type BasePage, type PersonaDraft, type ProductBrief } from './schemas';
+import { guidanceBlock } from './guidance';
 
 /**
  * Stage 2b — the buyer personas, five at a time.
@@ -103,6 +104,8 @@ export async function generatePersonaBatch(
   productType: ProductType = 'ecom',
   /** How many this campaign is writing in total. Shapes how wide to reach. */
   target = 20,
+  /** What the operator said was wrong with the pages this replaced. */
+  guidance: string | null = null,
 ): Promise<PersonaBatchResult> {
   // Both, because a persona writes page copy as well as choosing who it is for:
   // the vehicle rule that bans "Buy now" has to reach the persona's own three
@@ -122,7 +125,7 @@ export async function generatePersonaBatch(
       + (imageLibrary
         ? `IMAGE LIBRARY (choose by index, -1 for none)\n---\n${imageLibrary}\n---`
         : 'IMAGE LIBRARY\n---\n(empty — use -1 for every image index)\n---'),
-    prompt: batchPrompt(want, existing, target),
+    prompt: batchPrompt(want, existing, target) + guidanceBlock(guidance),
     schema: PersonaBatchSchema,
     maxTokens: 16000,
   });
