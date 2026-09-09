@@ -362,8 +362,7 @@ export function CampaignProgress({ id }: { id: string }) {
 
   if (!view) {
     return (
-      <Shell>
-        <TopBar />
+      <Shell header={<TopBar />}>
         {error ? <Callout tone="error" title="Could not open this campaign">{error}</Callout>
           : <p className="text-zinc-500">Loading…</p>}
       </Shell>
@@ -421,15 +420,16 @@ export function CampaignProgress({ id }: { id: string }) {
   });
 
   return (
-    <Shell>
-      <TopBar />
-
+    <Shell header={<TopBar />}>
       <div className="mb-8">
-        <Link href="/" className="text-sm font-semibold text-zinc-500 underline hover:text-zinc-900">
+        <Link
+          href="/"
+          className="text-sm font-semibold text-zinc-500 underline underline-offset-4 hover:text-accent"
+        >
           ← All campaigns
         </Link>
-        <h1 className="mt-3 text-3xl font-bold tracking-tight">{campaign.title}</h1>
-        <p className="mt-2 text-zinc-600">
+        <h1 className="mt-4 text-5xl font-bold">{campaign.title}</h1>
+        <p className="mt-3 text-lg leading-relaxed text-zinc-500">
           {finished ? `${personas.length} pages are live, and the ad library has been read.`
             : failed ? 'Stopped. Nothing is lost — see below.'
               : pagesLive ? `${personas.length} pages are live. Now reading Meta's ad library `
@@ -471,7 +471,7 @@ export function CampaignProgress({ id }: { id: string }) {
                 : 'Almost every shop is read without it, but this one has to be opened in a real '
                   + 'browser. Open Terminal, paste this, and leave the window open:'}
             </p>
-            <pre className="mt-2 overflow-x-auto rounded-md bg-amber-100 px-3 py-2 font-mono text-xs">
+            <pre className="mt-2 overflow-x-auto rounded-[var(--radius-brand-card)] bg-amber-100 px-3 py-2 font-mono text-xs">
               cd ~/.buzz/REPOS/ad-assist/scanner &amp;&amp; npm start
             </pre>
             <p className="mt-2">
@@ -518,8 +518,11 @@ export function CampaignProgress({ id }: { id: string }) {
         </div>
       ) : null}
 
-      <Card>
-        <ol className="space-y-5">
+      {/* Rule-separated rather than spaced apart: this is the screen the comp
+          draws, and its checklist is a stack of hard rules with a square
+          marker on each row. */}
+      <Card className="py-2 sm:py-3">
+        <ol>
           {steps.map((step) => <StepRow key={step.key} step={step} spinning={running} />)}
         </ol>
       </Card>
@@ -566,10 +569,10 @@ export function CampaignProgress({ id }: { id: string }) {
 
 function StepRow({ step, spinning }: { step: Step; spinning: boolean }) {
   return (
-    <li className="flex gap-4">
+    <li className="flex gap-4 border-t-2 border-zinc-900 py-4 first:border-t-0">
       <Bullet state={step.state} spinning={spinning} />
       <div className="min-w-0">
-        <p className={`text-base font-semibold ${
+        <p className={`font-display text-lg font-semibold tracking-[-0.02em] ${
           step.state === 'unbuilt' ? 'text-zinc-400'
             : step.state === 'failed' ? 'text-red-700' : 'text-zinc-900'
         }`}
@@ -579,7 +582,7 @@ function StepRow({ step, spinning }: { step: Step; spinning: boolean }) {
             ? <span className="ml-2 align-middle text-xs font-bold uppercase tracking-wide text-zinc-400">Not built yet</span>
             : null}
         </p>
-        <p className={`mt-0.5 text-sm leading-6 ${step.state === 'unbuilt' ? 'text-zinc-400' : 'text-zinc-500'}`}>
+        <p className={`mt-1 text-sm leading-6 ${step.state === 'unbuilt' ? 'text-zinc-400' : 'text-zinc-500'}`}>
           {step.detail}
         </p>
       </div>
@@ -587,9 +590,14 @@ function StepRow({ step, spinning }: { step: Step; spinning: boolean }) {
   );
 }
 
+/**
+ * Square, not round, and blue rather than green when it is done — both the
+ * comp's. It spends its one accent colour on "this finished", which is the
+ * thing anybody watching this screen is looking for.
+ */
 function Bullet({ state, spinning }: { state: StepState; spinning: boolean }) {
-  const base = 'mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-sm font-bold';
-  if (state === 'done') return <span className={`${base} bg-emerald-600 text-white`}>✓</span>;
+  const base = 'mt-1 flex size-6 shrink-0 items-center justify-center text-sm font-bold';
+  if (state === 'done') return <span className={`${base} bg-accent text-white`}>✓</span>;
   if (state === 'failed') return <span className={`${base} bg-red-600 text-white`}>!</span>;
   if (state === 'active') {
     return (
@@ -640,7 +648,7 @@ function BasePageReview({
   return (
     <div className="mt-6">
       <Card>
-        <h2 className="text-xl font-bold tracking-tight">Read this before the {target}</h2>
+        <h2 className="text-xl font-bold">Read this before the {target}</h2>
         <p className="mt-1 text-sm leading-6 text-zinc-500">
           Reasons 4 to 10 below are copied onto every one of the {target} pages,
           word for word. Only the headline and reasons 1 to 3 change per buyer. So if
@@ -649,7 +657,7 @@ function BasePageReview({
         </p>
 
         {lastGuidance ? (
-          <p className="mt-3 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">
+          <p className="mt-3 rounded-[var(--radius-brand-card)] bg-zinc-100 px-4 py-3 text-sm text-zinc-600">
             Rewritten with your note: “{lastGuidance}”
           </p>
         ) : null}
@@ -685,7 +693,7 @@ function BasePageReview({
                     src={url}
                     alt=""
                     loading="lazy"
-                    className="size-14 rounded-md border border-black/10 object-cover"
+                    className="size-14 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
                   />
                 ))}
               </div>
@@ -735,7 +743,7 @@ function BasePageReview({
                     {/* The slot, named. What goes here is decided after approval,
                         so what is shown is what the copy says it should be. */}
                     {r.image_prompt?.trim() ? (
-                      <p className="mt-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500">
+                      <p className="mt-2 rounded-[var(--radius-brand-card)] border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500">
                         <span className="font-bold uppercase tracking-wide text-zinc-400">
                           Picture slot ·{' '}
                         </span>
@@ -842,7 +850,7 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
   return (
     <div className="mt-6">
       <Card>
-        <h2 className="text-xl font-bold tracking-tight">
+        <h2 className="text-xl font-bold">
           {formats.length} format{formats.length === 1 ? ' that keeps' : 's that keep'} working
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
@@ -867,7 +875,7 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
             </h3>
             <ul className="mt-3 space-y-4">
               {group.items.map((f) => (
-                <li key={f.id} className="rounded-xl border border-zinc-200 p-4">
+                <li key={f.id} className="rounded-[var(--radius-brand-card)] border border-zinc-200 p-4">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                     <p className="font-semibold text-zinc-900">{f.format_name}</p>
                     <p className="text-xs text-zinc-500">
@@ -993,7 +1001,7 @@ function Leads({ leads }: { leads: Lead[] }) {
   return (
     <div className="mt-6">
       <Card>
-        <h2 className="text-xl font-bold tracking-tight">
+        <h2 className="text-xl font-bold">
           {leads.length} enquir{leads.length === 1 ? 'y' : 'ies'}
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
@@ -1039,7 +1047,7 @@ function LivePages({
       <Card>
         <div className="flex items-baseline justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold tracking-tight">Your {personas.length} pages</h2>
+            <h2 className="text-xl font-bold">Your {personas.length} pages</h2>
             <p className="mt-1 text-sm text-zinc-500">
               Each link is a real page, live right now. Put one link in one ad, so you find out
               which buyer responds.
@@ -1140,7 +1148,7 @@ function Ideas({
   return (
     <div className="mt-6">
       <Card>
-        <h2 className="text-xl font-bold tracking-tight">
+        <h2 className="text-xl font-bold">
           {ideas.length} ad idea{ideas.length === 1 ? '' : 's'}
         </h2>
         <p className="mt-1 text-sm leading-6 text-zinc-500">
@@ -1195,9 +1203,11 @@ function Ideas({
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl bg-zinc-50 px-4 py-3 ring-1 ring-zinc-200">
-      <dt className="text-xs font-bold uppercase tracking-wide text-zinc-400">{label}</dt>
-      <dd className="mt-0.5 text-lg font-bold text-zinc-900">
+    <div className="rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 ring-1 ring-zinc-200">
+      <dt className="font-display text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+        {label}
+      </dt>
+      <dd className="font-display mt-1 text-2xl font-bold tracking-[-0.03em] text-zinc-900">
         {value}
         {sub ? <span className="ml-1 text-sm font-medium text-zinc-400">{sub}</span> : null}
       </dd>
@@ -1207,9 +1217,9 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 const STATUS_PILL: Record<AdIdea['status'], { label: string; className: string }> = {
   draft: { label: 'Waiting on you', className: 'bg-zinc-100 text-zinc-600' },
-  approved: { label: 'Approved', className: 'bg-blue-100 text-blue-800' },
-  generating: { label: 'Being made', className: 'bg-blue-100 text-blue-800' },
-  generated: { label: 'Made', className: 'bg-emerald-100 text-emerald-800' },
+  approved: { label: 'Approved', className: 'bg-accent-tint text-accent-deep' },
+  generating: { label: 'Being made', className: 'bg-accent-tint text-accent-deep' },
+  generated: { label: 'Made', className: 'bg-accent text-white' },
   failed: { label: 'Failed', className: 'bg-red-100 text-red-800' },
   rejected: { label: 'Sent back', className: 'bg-amber-100 text-amber-900' },
 };
@@ -1294,14 +1304,14 @@ function IdeaRow({
   return (
     <Card className="p-5 sm:p-6">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-md bg-zinc-900 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
+        <span className="rounded-[var(--radius-brand-card)] bg-zinc-900 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
           {idea.media_type === 'image' ? 'Static' : 'Video'}
         </span>
-        <span className={`rounded-md px-2 py-0.5 text-xs font-bold uppercase tracking-wide ${pill.className}`}>
+        <span className={`rounded-[var(--radius-brand-card)] px-2 py-0.5 text-xs font-bold uppercase tracking-wide ${pill.className}`}>
           {pill.label}
         </span>
         {idea.edited_at ? (
-          <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-zinc-500">
+          <span className="rounded-[var(--radius-brand-card)] bg-zinc-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-zinc-500">
             Your words
           </span>
         ) : null}
@@ -1393,7 +1403,7 @@ function IdeaRow({
                 src={idea.source_image_url}
                 alt=""
                 loading="lazy"
-                className="size-20 shrink-0 rounded-lg border border-black/10 object-cover"
+                className="size-20 shrink-0 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
               />
             ) : null}
             <div className="min-w-0 text-sm leading-6 text-zinc-600">
@@ -1417,7 +1427,7 @@ function IdeaRow({
                 ? 'The rewritten instruction'
                 : `The instruction that makes the ${idea.media_type === 'image' ? 'picture' : 'video'}`}
             </summary>
-            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
+            <p className="mt-2 whitespace-pre-wrap rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
               {idea.kie_prompt}
             </p>
             {idea.video_storyboard?.beats?.length ? (
@@ -1462,9 +1472,9 @@ function IdeaRow({
           ) : null}
           {idea.media_type === 'image' ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-xl border border-black/10" />
+            <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-[var(--radius-brand-card)] border border-black/10" />
           ) : (
-            <video src={fileUrl} controls playsInline className="w-full rounded-xl border border-black/10" />
+            <video src={fileUrl} controls playsInline className="w-full rounded-[var(--radius-brand-card)] border border-black/10" />
           )}
           <p className="mt-2 text-xs text-zinc-400">
             {asset?.credits_charged != null
@@ -1502,7 +1512,7 @@ function IdeaRow({
             {rejectedAttempts.map((old) => {
               const url = old.stored_url ?? old.result_url;
               return (
-                <div key={old.id} className="rounded-xl bg-zinc-50 p-3 ring-1 ring-zinc-200">
+                <div key={old.id} className="rounded-[var(--radius-brand-card)] bg-zinc-50 p-3 ring-1 ring-zinc-200">
                   <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
                     Attempt {old.attempt ?? 1} · sent back
                   </p>
@@ -1514,9 +1524,9 @@ function IdeaRow({
                   {url ? (
                     idea.media_type === 'image' ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={url} alt="" className="mt-2 w-full rounded-lg border border-black/10 opacity-75" />
+                      <img src={url} alt="" className="mt-2 w-full rounded-[var(--radius-brand-card)] border border-black/10 opacity-75" />
                     ) : (
-                      <video src={url} controls playsInline className="mt-2 w-full rounded-lg border border-black/10" />
+                      <video src={url} controls playsInline className="mt-2 w-full rounded-[var(--radius-brand-card)] border border-black/10" />
                     )
                   ) : null}
                   {old.prompt_used ? (
@@ -1542,7 +1552,7 @@ function IdeaRow({
       ) : null}
 
       {idea.status === 'generating' || idea.status === 'approved' ? (
-        <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        <p className="mt-4 rounded-[var(--radius-brand-card)] bg-accent-tint px-4 py-3 text-sm text-accent-deep">
           Being made now — about {idea.media_type === 'image' ? 'a minute' : 'three minutes'}.
           This screen checks every ten seconds. Closing the tab does not cancel it; the file is
           collected next time you open the campaign.
@@ -1554,7 +1564,7 @@ function IdeaRow({
           changed about it. Both are shown together rather than as a warning
           strip, because nothing here has gone wrong — this is the loop working. */}
       {idea.status === 'draft' && attempt > 1 ? (
-        <div className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+        <div className="mt-4 rounded-[var(--radius-brand-card)] bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
           <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
             Attempt {attempt} — not made yet
           </p>
@@ -1577,7 +1587,7 @@ function IdeaRow({
           </p>
         </div>
       ) : idea.rejected_reason ? (
-        <p className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="mt-4 rounded-[var(--radius-brand-card)] bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {idea.rejected_reason}
         </p>
       ) : null}
@@ -1586,7 +1596,7 @@ function IdeaRow({
           click is where the money goes and the instruction it will spend it on
           has to be on screen first. */}
       {redoing ? (
-        <div className="mt-4 rounded-xl bg-zinc-50 p-4 ring-1 ring-zinc-200">
+        <div className="mt-4 rounded-[var(--radius-brand-card)] bg-zinc-50 p-4 ring-1 ring-zinc-200">
           <Field
             label="What is wrong with it?"
             help={idea.media_type === 'video'

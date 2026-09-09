@@ -27,8 +27,10 @@ export function SignIn() {
   return (
     <Shell>
       <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Ad Assist</h1>
-        <p className="mt-2 text-zinc-600">Sign in to build a campaign.</p>
+        <h1 className="text-5xl font-bold">
+          Ad Assist<span className="text-accent">.</span>
+        </h1>
+        <p className="mt-3 text-lg text-zinc-500">Sign in to build a campaign.</p>
       </div>
       <Card>
         <form onSubmit={submit} className="space-y-5">

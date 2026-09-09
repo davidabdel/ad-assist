@@ -79,20 +79,38 @@ export function Wizard({ onCancel }: { onCancel?: () => void }) {
 
   return (
     <div>
+      {/* The comp's numbered rail, laid on its side to fit five long questions:
+          a two-digit number over a hard bar, accent for the steps already
+          answered and ink for the one on screen. Same five steps, same order,
+          same behaviour — it is the pill bars that were not the brand. */}
       <ol className="mb-6 flex gap-2" aria-label="Progress">
-        {STEPS.map((label, i) => (
-          <li
-            key={label}
-            className={`h-1.5 flex-1 rounded-full ${i + 1 <= step ? 'bg-zinc-900' : 'bg-zinc-300'}`}
-          />
-        ))}
+        {STEPS.map((label, i) => {
+          const done = i + 1 < step;
+          const here = i + 1 === step;
+          return (
+            <li key={label} className="flex-1">
+              <span
+                className={`font-display block text-[11px] font-semibold tracking-[0.14em] ${
+                  here ? 'text-zinc-900' : done ? 'text-accent' : 'text-zinc-400'
+                }`}
+              >
+                {`0${i + 1}`}
+              </span>
+              <span
+                className={`mt-1 block h-1 ${
+                  here ? 'bg-zinc-900' : done ? 'bg-accent' : 'bg-zinc-200'
+                }`}
+              />
+            </li>
+          );
+        })}
       </ol>
 
       <Card>
-        <p className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+        <p className="font-display text-xs font-semibold uppercase tracking-[0.14em] text-accent">
           Step {step} of {STEPS.length}
         </p>
-        <h2 className="mt-1 text-2xl font-bold tracking-tight">{STEPS[step - 1]}</h2>
+        <h2 className="mt-2 text-3xl font-bold">{STEPS[step - 1]}</h2>
 
         <div className="mt-6 space-y-6">
           {step === 1 && <StepKind draft={draft} setDraft={setDraft} />}
@@ -551,9 +569,9 @@ function FileField({
         accept={ACCEPT_ATTR[kind]}
         multiple={multiple}
         onChange={(e) => choose(e.target.files)}
-        className="block w-full text-sm text-zinc-600 file:mr-3 file:rounded-lg file:border-0
-                   file:bg-zinc-900 file:px-4 file:py-2.5 file:text-sm file:font-semibold
-                   file:text-white hover:file:bg-zinc-700"
+        className="block w-full text-sm text-zinc-600 file:mr-3 file:rounded-[var(--radius-brand)]
+                   file:border-0 file:bg-zinc-900 file:px-4 file:py-2.5 file:text-sm
+                   file:font-semibold file:text-white hover:file:bg-accent"
       />
 
       {busy > 0 ? (
@@ -589,8 +607,10 @@ function ModeTab({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg px-4 py-2 text-sm font-semibold ring-1 ${
-        active ? 'bg-zinc-900 text-white ring-zinc-900' : 'bg-white text-zinc-600 ring-zinc-300'
+      className={`font-display rounded-[var(--radius-brand)] border-2 px-4 py-2 text-sm font-semibold ${
+        active
+          ? 'border-zinc-900 bg-zinc-900 text-white'
+          : 'border-zinc-300 bg-white text-zinc-600 hover:border-zinc-900 hover:text-zinc-900'
       }`}
     >
       {children}
@@ -605,12 +625,14 @@ function ChoiceCard({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl p-4 text-left ring-1 transition-colors ${
-        active ? 'bg-zinc-900 text-white ring-zinc-900' : 'bg-white text-zinc-900 ring-zinc-300 hover:bg-zinc-50'
+      className={`rounded-[var(--radius-brand-card)] border-2 p-4 text-left transition-colors ${
+        active
+          ? 'border-zinc-900 bg-zinc-900 text-white'
+          : 'border-zinc-300 bg-white text-zinc-900 hover:border-accent'
       }`}
     >
-      <span className="block text-base font-semibold">{title}</span>
-      <span className={`mt-1 block text-sm leading-6 ${active ? 'text-zinc-300' : 'text-zinc-500'}`}>
+      <span className="font-display block text-base font-semibold tracking-[-0.01em]">{title}</span>
+      <span className={`mt-1 block text-sm leading-6 ${active ? 'text-zinc-400' : 'text-zinc-500'}`}>
         {body}
       </span>
     </button>

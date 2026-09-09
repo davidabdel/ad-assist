@@ -40,10 +40,9 @@ export function Home() {
 
   if (starting) {
     return (
-      <Shell>
-        <TopBar />
-        <h1 className="mb-2 text-3xl font-bold tracking-tight">Build a campaign</h1>
-        <p className="mb-8 text-zinc-600">
+      <Shell header={<TopBar />}>
+        <h1 className="mb-3 text-5xl font-bold">Build a campaign</h1>
+        <p className="mb-8 text-lg leading-relaxed text-zinc-500">
           One product goes in. Twenty landing pages come out, each written for a different
           kind of buyer. Four questions, about a minute.
         </p>
@@ -53,12 +52,11 @@ export function Home() {
   }
 
   return (
-    <Shell>
-      <TopBar />
+    <Shell header={<TopBar />}>
       <div className="mb-8 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Your campaigns</h1>
-          <p className="mt-2 text-zinc-600">Pick one up where it left off, or start another.</p>
+          <h1 className="text-5xl font-bold">Your campaigns</h1>
+          <p className="mt-3 text-lg text-zinc-500">Pick one up where it left off, or start another.</p>
         </div>
         <Button onClick={() => setStarting(true)}>New campaign</Button>
       </div>
@@ -70,9 +68,9 @@ export function Home() {
       <div className="space-y-3">
         {campaigns?.map((c) => (
           <Link key={c.id} href={`/campaigns/${c.id}`} className="block">
-            <Card className="p-5 transition-shadow hover:shadow-md sm:p-5">
+            <Card className="p-5 transition-colors hover:border-accent sm:p-5">
               <div className="flex items-baseline justify-between gap-4">
-                <span className="text-lg font-semibold">{c.title}</span>
+                <span className="font-display text-xl font-semibold tracking-[-0.02em]">{c.title}</span>
                 <span className="shrink-0 text-sm text-zinc-500">
                   {new Date(c.created_at).toLocaleDateString()}
                 </span>

@@ -1,17 +1,84 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * THE BRAND LAYER.
+ *
+ * The design comp ships two directions of the same identity — "Paper" (warm
+ * off-white, light Outfit, pill buttons) and "Ink" (white page, black rail,
+ * heavy Outfit, square edges). Both share the typeface pair and the one blue
+ * accent; they differ only in the neutral ramp and the corner radius. So the
+ * fork is a block of values, not a fork in the components: swap the ramp below
+ * and --radius-brand, and every screen follows.
+ *
+ * WHY THE ZINC RAMP IS REPAINTED RATHER THAN REPLACED. Every dashboard screen
+ * already speaks in zinc-*, and it uses nothing else — 200-odd class names
+ * across five components. Retuning the ramp repaints all of them without
+ * editing a single class list, which is the point: this is a reskin, and a
+ * reskin that rewrites 200 class names is a reskin that can change behaviour.
+ *
+ * THIS CANNOT REACH A LIVE AD DESTINATION. The public /p/ pages use zero
+ * Tailwind colour classes — they are driven entirely by --brand-* variables
+ * read off the seller's own website (see lib/brand.ts), and Listicle sets its
+ * own background, colour and font-family on its wrapper. Verified by grep
+ * before this file was written.
+ */
+
+@theme {
+  /* ---- Ink (live). Paper's values are kept underneath, commented. ---- */
+  --color-zinc-50: #fafafa;
+  --color-zinc-100: #f5f5f5;
+  --color-zinc-200: #ececec;
+  --color-zinc-300: #d6d6d6;
+  --color-zinc-400: #b0b0b0;
+  --color-zinc-500: #6f6f6f;
+  --color-zinc-600: #4a4a4a;
+  --color-zinc-700: #2a2a2a;
+  --color-zinc-800: #17171a;
+  --color-zinc-900: #0b0b0c;
+  --color-zinc-950: #050506;
+
+  /* ---- Paper. Uncomment this block and comment the one above to switch. ----
+  --color-zinc-50:  #faf8f4;
+  --color-zinc-100: #f6f3ee;
+  --color-zinc-200: #e3ded4;
+  --color-zinc-300: #d9d3c8;
+  --color-zinc-400: #a39d92;
+  --color-zinc-500: #6b665c;
+  --color-zinc-600: #4c473e;
+  --color-zinc-700: #35312a;
+  --color-zinc-800: #24211b;
+  --color-zinc-900: #16140f;
+  --color-zinc-950: #0d0b08;
+  ---------------------------------------------------------------------- */
+
+  /* The one accent, identical in both directions. */
+  --color-accent: #2f6bff;
+  --color-accent-deep: #1f4fd1;
+  --color-accent-tint: #eef3ff;
+
+  /* Ink squares its corners; Paper rounds them to a pill. Everything that has
+     a brand-owned shape reads this rather than a Tailwind radius. */
+  --radius-brand: 0px;      /* Paper: 999px */
+  --radius-brand-card: 0px; /* Paper: 18px  */
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-manrope);
+  --font-display: var(--font-outfit);
 }
 
+:root {
+  --background: #ffffff;
+  --foreground: #0b0b0c;
+}
+
+/**
+ * The dark scheme belongs to the public pages only, and even there it is a
+ * fallback the brand variables normally override. The dashboard is light at
+ * 9pm and at 9am — see the note in components/ui.tsx.
+ */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
@@ -22,5 +89,38 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-manrope), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/**
+ * Headlines are the loudest thing the comp does: Outfit, tight tracking, and
+ * in Ink a weight the body text never uses. Set once here rather than on every
+ * heading so a screen cannot forget it.
+ *
+ * SCOPED TO .dash ON PURPOSE. A bare `h1 { font-family }` rule would beat the
+ * inherited family the public listicle sets on its own wrapper, and repaint a
+ * seller's branded page in our typeface. `.dash` is set by the Shell, which
+ * every signed-in screen goes through and no public page does.
+ */
+.dash h1,
+.dash h2,
+.dash h3,
+.dash .font-display {
+  font-family: var(--font-outfit), var(--font-manrope), system-ui, sans-serif;
+}
+
+/**
+ * Tracking is set only on the headings, and deliberately NOT on .font-display.
+ * A descendant selector outranks a Tailwind utility class, so putting
+ * letter-spacing on .font-display quietly beat every `tracking-*` on the
+ * elements wearing it — the wizard's "STEP 1 OF 5" eyebrow rendered as
+ * "STEP1OF5".
+ *
+ * h3 is left out for the same reason: the only h3s on the dashboard are the
+ * small uppercase group labels, which want tracking opened up, not closed.
+ */
+.dash h1,
+.dash h2 {
+  letter-spacing: -0.035em;
 }
