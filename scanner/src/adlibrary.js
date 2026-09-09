@@ -21,14 +21,38 @@ const BASE = 'https://www.facebook.com/ads/library/';
 
 export const REGIONS = { AU: 'AU', US: 'US', GB: 'GB' };
 
+/**
+ * Meta's media_type filter is finer than ours, and its "Images" is narrower than
+ * the word suggests: the library defines it as "images with little to no text",
+ * and files anything carrying words on the picture — "20% OFF", a testimonial
+ * quote, a before/after label — under "Memes" instead. Nearly every static ad an
+ * ecommerce seller runs is a meme by that definition, so scanning `image` was
+ * reading a third of the shelf and calling it the shelf.
+ *
+ * Measured on the live library, AU, "seat covers", active ads:
+ *   media_type=image           →   350 results
+ *   media_type=meme            →   170
+ *   media_type=image_and_meme  → 1,200   ← what a static scan should see
+ *   media_type=video           → 2,000
+ *   media_type=all             → 3,300
+ *   media_type=<invalid>       → 3,300   (an unknown value falls back to "all",
+ *                                         silently, which is why this is pinned)
+ *
+ * We keep OUR side two-valued — an ad is static or it is video, and that is the
+ * distinction the format and idea stages care about. Only the URL widens.
+ */
+const LIBRARY_MEDIA_TYPE = { image: 'image_and_meme', video: 'video' };
+
 export function buildSearchUrl({ region, mediaType, term }) {
+  const libraryType = LIBRARY_MEDIA_TYPE[mediaType];
+  if (!libraryType) throw new Error(`unknown mediaType "${mediaType}"`);
   const p = new URLSearchParams({
     active_status: 'active',
     ad_type: 'all',
     country: region,
     q: term,
     search_type: 'keyword_unordered',
-    media_type: mediaType,          // 'image' | 'video'
+    media_type: libraryType,
   });
   return `${BASE}?${p}`;
 }
