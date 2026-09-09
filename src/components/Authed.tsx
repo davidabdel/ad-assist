@@ -34,22 +34,36 @@ function Gate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** The bar every signed-in screen carries. */
+/**
+ * The masthead every signed-in screen carries. Passed to `Shell` as its
+ * `header` so the black field runs edge to edge.
+ *
+ * The wordmark is the comp's, full stop and all: Outfit, heavy, tight, with the
+ * one accent colour spent on a single character. It is the only place the brand
+ * signs its own name, so it is the only place that gets the blue.
+ */
 export function TopBar() {
   const { email, signOut } = useSession();
   return (
-    <div className="mb-8 flex items-baseline justify-between gap-4">
-      <Link href="/" className="text-lg font-bold tracking-tight text-zinc-900">Ad Assist</Link>
-      <div className="flex items-baseline gap-3 text-sm text-zinc-500">
-        <span className="hidden sm:inline">{email}</span>
-        <button
-          type="button"
-          onClick={() => signOut()}
-          className="font-semibold underline hover:text-zinc-900"
+    <header className="bg-zinc-900 text-white">
+      <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-4 px-5 py-4">
+        <Link
+          href="/"
+          className="font-display text-xl font-bold tracking-[-0.02em] text-white"
         >
-          Sign out
-        </button>
+          Ad Assist<span className="text-accent">.</span>
+        </Link>
+        <div className="flex items-baseline gap-4 text-sm text-zinc-400">
+          <span className="hidden sm:inline">{email}</span>
+          <button
+            type="button"
+            onClick={() => signOut()}
+            className="font-semibold underline underline-offset-4 hover:text-white"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
-    </div>
+    </header>
   );
 }
