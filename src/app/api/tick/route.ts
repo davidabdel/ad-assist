@@ -51,6 +51,12 @@ export const maxDuration = 300;
 const DRIVABLE = [
   'pending', 'scraping', 'base_review', 'images', 'personas',
   'pages_built', 'scanning', 'extracting', 'writing_ideas',
+  // Finished, and here anyway. A campaign that reached `ideas_ready` before the
+  // generated pictures existed is sitting on ads that can never be made, and
+  // `advance()` heals it by rewinding to `writing_ideas` — but only if something
+  // visits. Every finished campaign with nothing to heal is filtered out below,
+  // so this costs one query per tick rather than a visit per campaign.
+  'ideas_ready',
 ];
 
 /**
@@ -133,6 +139,21 @@ async function tick(only?: string): Promise<Response> {
       .select('campaign_id').in('campaign_id', parked);
     const waitingOnHim = new Set((written ?? []).map((r) => r.campaign_id as string));
     candidates = candidates.filter((c) => !waitingOnHim.has(c.id));
+  }
+
+  // The same idea for finished campaigns. `ideas_ready` is drivable only so that
+  // one with unmakeable ads can rewind and fix them; one with nothing to fix
+  // would otherwise be read, found terminal and dropped every ten seconds for
+  // the rest of its life. Ask once, for all of them, and keep only the ones with
+  // an ad that has neither a photograph nor a picture described.
+  const finished = candidates.filter((c) => c.status === 'ideas_ready').map((c) => c.id);
+  if (finished.length) {
+    const { data: unmakeable } = await db.from('ad_ideas')
+      .select('campaign_id').in('campaign_id', finished).is('superseded_at', null)
+      .is('source_image_url', null).is('generated_image_prompt', null)
+      .in('status', ['draft', 'rejected', 'failed']);
+    const needsHealing = new Set((unmakeable ?? []).map((r) => r.campaign_id as string));
+    candidates = candidates.filter((c) => c.status !== 'ideas_ready' || needsHealing.has(c.id));
   }
 
   const driven: Driven[] = [];

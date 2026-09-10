@@ -1216,6 +1216,32 @@ async function unit(
           did: 'This campaign finished before the ad ideas stage existed. Writing them now.',
         };
       }
+
+      // The same rewind for the same reason one stage later. A campaign that
+      // reached here before the generated pictures existed is sitting on a table
+      // of ads that cannot be made — sixty of them on Pointtaken, whose site gave
+      // the ingest no photographs at all. `fillOnePicture` heals exactly that,
+      // but it runs at the END of `writing_ideas` and this status is terminal, so
+      // nothing would ever have called it on the campaign it was written for.
+      //
+      // Rewind rather than fill from here: `writing_ideas` is idempotent, every
+      // buyer already has ideas so it goes straight to the gap-filling branch,
+      // and it is a status the server tick will drive — which is the difference
+      // between healing on its own and healing only when somebody opens the page.
+      const { count: gaps } = await db.from('ad_ideas')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaign.id).is('superseded_at', null)
+        .is('source_image_url', null).is('generated_image_prompt', null)
+        .in('status', ['draft', 'rejected', 'failed']);
+      if (gaps) {
+        await db.from('campaigns').update({ status: 'writing_ideas' }).eq('id', campaign.id);
+        return {
+          status: 'writing_ideas', done: false, waiting: false, terminal: false,
+          did: `${gaps} ads have no photograph and no picture described, so they cannot be `
+            + 'made. Writing their pictures now — this costs tokens and nothing else.',
+        };
+      }
+
       return {
         status: 'ideas_ready', done: true, waiting: false, terminal: true,
         did: `${count} ad ideas are waiting for you. Nothing is generated or charged until you `

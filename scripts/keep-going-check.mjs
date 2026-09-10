@@ -374,8 +374,94 @@ const { data: stillParked } = await db.from('campaigns')
   .select('status').eq('id', parked.id).single();
 check('and stays exactly where it is', stillParked.status === 'base_review', stillParked.status);
 
+// ── a finished campaign whose ads cannot be made ───────────────────
+//
+// `ideas_ready` was terminal AND absent from DRIVABLE, so the step that writes a
+// picture for an ad that has no photograph could never reach the campaign it was
+// written for: Pointtaken finished before that step existed and sat on sixty
+// unmakeable ads. Two things are asserted here — that such a campaign is now
+// visited and rewound, and that a finished campaign with nothing wrong with it
+// is still left completely alone, because the tick sees it every ten seconds.
+//
+// NO MODEL CALL. The brief is deliberately absent, so the picture step refuses
+// at its first line. That is enough: reaching that refusal is itself the proof
+// that a terminal status rewound into the gap-filling branch.
+async function seedFinished(label, { withGap, withBrief = false }) {
+  const { data: c, error } = await db.from('campaigns').insert({
+    user_id: userId,
+    title: label,
+    slug: `${label}-${Date.now()}`,
+    source_url: 'https://example.com/thing',
+    region: 'AU',
+    status: 'ideas_ready',
+    persona_target: 1,
+    scraped_data: withBrief
+      ? { raw: {}, brief: { brand_name: 'Thing', product_name: 'Thing' } }
+      : { raw: {} },
+  }).select('id').single();
+  if (error) throw new Error(`could not seed ${label}: ${error.message}`);
+
+  const { data: p, error: perr } = await db.from('personas').insert({
+    campaign_id: c.id,
+    persona_index: 1,
+    slug: 'buyer',
+    persona_name: 'Buyer',
+    primary_pain_point: 'It hurts',
+    core_desire: 'It should not',
+    angle_hook: 'Stop it hurting',
+    custom_hero_headline: 'It should not hurt',
+    custom_reasons: [],
+  }).select('id').single();
+  if (perr) throw new Error(`could not seed the buyer for ${label}: ${perr.message}`);
+
+  const { error: ierr } = await db.from('ad_ideas').insert({
+    campaign_id: c.id,
+    persona_id: p.id,
+    idea_index: 1,
+    media_type: 'image',
+    angle: 'Stop it hurting',
+    hook: 'It hurts',
+    headline: 'It should not hurt',
+    primary_text: 'It really should not.',
+    cta_label: 'Learn more',
+    visual_concept: 'Something',
+    kie_model: 'google/nano-banana-edit',
+    kie_prompt: 'Keep the product exactly as photographed.',
+    est_credits: 4,
+    est_usd: 0.02,
+    destination_url: 'https://example.com/thing',
+    // The gap: no photograph of theirs, and no picture described either.
+    source_image_url: withGap ? null : 'https://example.com/photo.jpg',
+  });
+  if (ierr) throw new Error(`could not seed the ad for ${label}: ${ierr.message}`);
+  return c.id;
+}
+
+const healthyId = await seedFinished('tick-finished-ok', { withGap: false });
+const healthy = await tick(healthyId);
+check('a finished campaign with nothing to fix is not driven at all',
+  (healthy.body.driven ?? []).length === 0, JSON.stringify(healthy.body).slice(0, 200));
+const { data: untouched } = await db.from('campaigns')
+  .select('status').eq('id', healthyId).single();
+check('and stays finished', untouched.status === 'ideas_ready', untouched.status);
+
+const stuckId = await seedFinished('tick-finished-unmakeable', { withGap: true });
+const healed = await tick(stuckId);
+const healRun = (healed.body.driven ?? []).find((d) => d.id === stuckId);
+check('a finished campaign with an unmakeable ad IS driven',
+  Boolean(healRun), JSON.stringify(healed.body).slice(0, 200));
+check('it rewinds out of the finished status',
+  healRun?.from === 'ideas_ready' && healRun?.to !== 'ideas_ready',
+  `${healRun?.from} → ${healRun?.to}`);
+check('and reaches the step that writes the missing picture',
+  (healRun?.last ?? '').includes('no photograph'), healRun?.last);
+const { data: rewound } = await db.from('campaigns')
+  .select('status').eq('id', stuckId).single();
+check('the row itself left ideas_ready', rewound.status !== 'ideas_ready', rewound.status);
+
 // ── tidy up ────────────────────────────────────────────────────────
-await db.from('campaigns').delete().in('id', [campaign.id, tickId, parked.id]);
+await db.from('campaigns').delete()
+  .in('id', [campaign.id, tickId, parked.id, healthyId, stuckId]);
 await db.auth.admin.deleteUser(userId);
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
