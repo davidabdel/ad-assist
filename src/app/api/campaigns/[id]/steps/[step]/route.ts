@@ -86,13 +86,33 @@ export async function POST(
       : '';
 
     const db = serviceClient();
-    // Read again inside the request rather than trusting what the browser was
-    // shown: the dialog may have been open for a while, and the sentence the
-    // operator agreed to is worth being true at the moment they agreed to it.
-    const effects = await describeRedo(db, campaign, loaded.step);
-    const result = await executeRedo(db, campaign, loaded.step, note);
 
-    return Response.json({ ...result, rebuilt: effects.rebuilds });
+    // The status check above is necessary and no longer sufficient. It was
+    // written when the only driver was an open tab, so a resting status meant
+    // nothing was running; the server tick drives `pending` campaigns whether
+    // or not anyone is looking, and a redo that rewound one mid-unit would
+    // leave a stage writing rows against a campaign that had moved underneath
+    // it. The driver lock is the same one `advance()` takes, so this either
+    // gets the campaign to itself or is told to come back.
+    const { data: mine } = await db.rpc('claim_persona_batch', { p_campaign: campaign.id });
+    if (!mine) {
+      return Response.json({
+        error: 'Something is working on this campaign at this moment. Give it a few seconds '
+          + 'and send the step back again — nothing is lost by waiting.',
+      }, { status: 409 });
+    }
+
+    try {
+      // Read again inside the request rather than trusting what the browser was
+      // shown: the dialog may have been open for a while, and the sentence the
+      // operator agreed to is worth being true at the moment they agreed to it.
+      const effects = await describeRedo(db, campaign, loaded.step);
+      const result = await executeRedo(db, campaign, loaded.step, note);
+
+      return Response.json({ ...result, rebuilt: effects.rebuilds });
+    } finally {
+      await db.rpc('release_persona_batch', { p_campaign: campaign.id });
+    }
   } catch (e) {
     if (e instanceof AuthError) return Response.json({ error: e.message }, { status: e.status });
     return Response.json({ error: (e as Error).message }, { status: 500 });

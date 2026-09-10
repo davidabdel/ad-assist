@@ -129,9 +129,61 @@ async function fail(id: string, message: string): Promise<AdvanceResult> {
   return { status: 'failed', did: message, done: false, waiting: false, terminal: true };
 }
 
+/**
+ * One unit of work, under a per-campaign driver lock.
+ *
+ * The lock used to be taken inside the two stages that write rows with a unique
+ * index on them, because a second driver was an accident — two tabs open on one
+ * campaign. It is no longer an accident. A campaign is now driven by the screen
+ * AND by the server tick (see `app/api/tick`), on purpose, so that closing the
+ * tab does not stop the run — which makes two drivers the normal case rather
+ * than the odd one, and leaves every OTHER stage exposed: two drivers at
+ * `scraping` is two paid-for briefs, and two at `base_review` is two base pages
+ * where the rest of the code expects at most one.
+ *
+ * So the whole unit is inside it, and the stages hold nothing of their own.
+ *
+ * The lock is `claim_persona_batch` (0007), whose name is now narrower than its
+ * job. Deliberately not renamed: a rename is a two-step deploy where in-flight
+ * old code calls a function that no longer exists, and the cost of that is a
+ * failed campaign rather than a confusing name.
+ */
 export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
   const db = serviceClient();
 
+  const { data: claimed, error: claimError } = await db
+    .rpc('claim_persona_batch', { p_campaign: campaign.id });
+  if (claimError) return fail(campaign.id, `Could not claim the campaign: ${claimError.message}`);
+  if (!claimed) {
+    // `waiting` rather than an error: the other driver is doing the work, and
+    // every caller already knows how to back off and ask again.
+    return {
+      status: campaign.status, done: false, waiting: true, terminal: false,
+      did: 'Something else is already working on this campaign. Waiting for it rather than '
+        + 'doing the same step twice.',
+    };
+  }
+
+  try {
+    // Read the row again, under the claim. The one this was called with was
+    // fetched before the lock was held — by an auth check, or by a tick that
+    // listed campaigns a minute ago — so its status can already be a stage out
+    // of date, and acting on a stale status is how a stage runs twice.
+    const { data: fresh } = await db.from('campaigns')
+      .select('*').eq('id', campaign.id).maybeSingle();
+    return await unit((fresh as CampaignRow | null) ?? campaign, db);
+  } finally {
+    // Every path inside returns, including the fail() ones. Releasing here
+    // rather than at each return is what keeps the next call from waiting out
+    // the five-minute expiry after an ordinary failure.
+    await db.rpc('release_persona_batch', { p_campaign: campaign.id });
+  }
+}
+
+async function unit(
+  campaign: CampaignRow,
+  db: ReturnType<typeof serviceClient>,
+): Promise<AdvanceResult> {
   switch (campaign.status) {
     // ── read the product page ───────────────────────────────────────────
     case 'pending': {
@@ -519,200 +571,183 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         };
       }
 
-      // One driver per campaign. Two tabs, or a phone and a laptop, are two
-      // drivers: without this they both read the same count, both write the same
-      // persona_index, and the loser dies on the unique constraint after paying
-      // for a full batch. Claimed BEFORE the model call so the loser pays
-      // nothing. See 0007_persona_batch_lock.sql.
-      const { data: claimed, error: claimError } = await db
-        .rpc('claim_persona_batch', { p_campaign: campaign.id });
-      if (claimError) return fail(campaign.id, `Could not claim the batch: ${claimError.message}`);
-      if (!claimed) {
+      // The driver lock advance() holds for the whole unit is what makes the
+      // count below safe to read. Two drivers on one campaign — a tab and the
+      // server tick, or a phone and a laptop — would otherwise both read
+      // "15 personas exist", both write index 16, and the loser would die on
+      // the unique constraint after paying for a full batch. The count is read
+      // HERE, inside the claim — a count taken outside it is the stale read the
+      // whole mechanism exists to prevent.
+      //
+      // Live pages only. A superseded page is one a redo replaced but could
+      // not delete because a finished ad points at its URL — it is history,
+      // not part of this campaign's twenty, and counting it here would make
+      // the run believe it had already written pages it is about to write.
+      const { data: existingRows } = await db.from('personas')
+        .select('persona_index, persona_name, primary_pain_point, slug')
+        .eq('campaign_id', campaign.id).is('superseded_at', null)
+        .order('persona_index');
+      const existing: ExistingPersona[] = existingRows ?? [];
+
+      // Slugs are the exception, and they are read across ALL pages including
+      // superseded ones. A slug is the page's public address; two rows
+      // sharing one would make /p/<campaign>/<slug> ambiguous, and the row
+      // that lost is the one a live ad is pointing at.
+      const { data: allSlugRows } = await db.from('personas')
+        .select('slug').eq('campaign_id', campaign.id);
+      const takenSlugs = new Set((allSlugRows ?? []).map((r) => r.slug as string));
+
+      // The persona call is text-only and batched, so it can never see a
+      // photograph. Captions written by the image stage are the whole of what
+      // it has to choose from, which is why they are written for that purpose
+      // rather than as alt text.
+      const { data: libraryRows } = await db.from('campaign_images')
+        .select('position, source_url, caption, usable')
+        .eq('campaign_id', campaign.id).order('position');
+
+      // A persona page is its own three reasons followed by the base page's
+      // reasons 4-10, so anything already showing in that locked tail — or in
+      // the base hero, when the persona inherits it — would appear twice on
+      // the finished page. Withhold those rather than ask the model not to
+      // pick them. Reasons 1-3 are replaced wholesale, so whatever illustrated
+      // them on the base page is free again.
+      const spokenFor = new Set<string>([
+        ...(basePage.hero_image_url ? [basePage.hero_image_url as string] : []),
+        ...((basePage.reasons as Reason[]) ?? [])
+          .filter((r) => r.number > 3 && r.image_url)
+          .map((r) => r.image_url as string),
+      ]);
+      const library = (libraryRows ?? [])
+        .filter((l) => !spokenFor.has(l.source_url));
+
+      if (existing.length >= target) {
+        await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
         return {
-          status: 'personas', done: false, waiting: true, terminal: false,
-          did: 'Another window is already writing this batch. Waiting for it rather than '
-            + 'writing the same pages twice.',
+          // NOT terminal. The pages being live is the milestone the operator
+          // came for, but it is not the end of the run — the ad scan comes
+          // next and `pages_built` is the state that queues it. This used to
+          // return terminal, which stopped the driving loop one call BEFORE
+          // the scan was ever handed to the Mac. The campaign then sat at
+          // `pages_built` indefinitely while the screen said it was reading
+          // the ad library, and only a page reload restarted it.
+          status: 'pages_built', done: true, waiting: false, terminal: false,
+          personas: existing.length,
+          did: `All ${existing.length} persona pages are live.`,
         };
       }
 
-      try {
-        // Read under the claim, not before it: a count taken outside the lock is
-        // the stale read this whole mechanism exists to prevent.
-        // Live pages only. A superseded page is one a redo replaced but could
-        // not delete because a finished ad points at its URL — it is history,
-        // not part of this campaign's twenty, and counting it here would make
-        // the run believe it had already written pages it is about to write.
-        const { data: existingRows } = await db.from('personas')
-          .select('persona_index, persona_name, primary_pain_point, slug')
-          .eq('campaign_id', campaign.id).is('superseded_at', null)
-          .order('persona_index');
-        const existing: ExistingPersona[] = existingRows ?? [];
+      const want = Math.min(PERSONA_BATCH, target - existing.length);
+      const rejectedNotes: string[] = [];
+      let added = 0;
 
-        // Slugs are the exception, and they are read across ALL pages including
-        // superseded ones. A slug is the page's public address; two rows
-        // sharing one would make /p/<campaign>/<slug> ambiguous, and the row
-        // that lost is the one a live ad is pointing at.
-        const { data: allSlugRows } = await db.from('personas')
-          .select('slug').eq('campaign_id', campaign.id);
-        const takenSlugs = new Set((allSlugRows ?? []).map((r) => r.slug as string));
-
-        // The persona call is text-only and batched, so it can never see a
-        // photograph. Captions written by the image stage are the whole of what
-        // it has to choose from, which is why they are written for that purpose
-        // rather than as alt text.
-        const { data: libraryRows } = await db.from('campaign_images')
-          .select('position, source_url, caption, usable')
-          .eq('campaign_id', campaign.id).order('position');
-
-        // A persona page is its own three reasons followed by the base page's
-        // reasons 4-10, so anything already showing in that locked tail — or in
-        // the base hero, when the persona inherits it — would appear twice on
-        // the finished page. Withhold those rather than ask the model not to
-        // pick them. Reasons 1-3 are replaced wholesale, so whatever illustrated
-        // them on the base page is free again.
-        const spokenFor = new Set<string>([
-          ...(basePage.hero_image_url ? [basePage.hero_image_url as string] : []),
-          ...((basePage.reasons as Reason[]) ?? [])
-            .filter((r) => r.number > 3 && r.image_url)
-            .map((r) => r.image_url as string),
-        ]);
-        const library = (libraryRows ?? [])
-          .filter((l) => !spokenFor.has(l.source_url));
-
-        if (existing.length >= target) {
-          await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
-          return {
-            // NOT terminal. The pages being live is the milestone the operator
-            // came for, but it is not the end of the run — the ad scan comes
-            // next and `pages_built` is the state that queues it. This used to
-            // return terminal, which stopped the driving loop one call BEFORE
-            // the scan was ever handed to the Mac. The campaign then sat at
-            // `pages_built` indefinitely while the screen said it was reading
-            // the ad library, and only a page reload restarted it.
-            status: 'pages_built', done: true, waiting: false, terminal: false,
-            personas: existing.length,
-            did: `All ${existing.length} persona pages are live.`,
+      for (let attempt = 1; attempt <= MAX_EMPTY_BATCHES && added === 0; attempt += 1) {
+        let batch;
+        try {
+          // Rebuild the shape rather than pass the row: ids and timestamps in the
+          // prompt are tokens spent on nothing, and invite the model to echo them.
+          const forPrompt: BasePage = {
+            page_title: basePage.page_title,
+            meta_description: basePage.meta_description ?? '',
+            hero_headline: basePage.hero_headline,
+            hero_subheadline: basePage.hero_subheadline ?? '',
+            reasons: basePage.reasons,
+            testimonials: basePage.testimonials,
+            offer_headline: basePage.offer_headline,
+            offer_body: basePage.offer_body ?? '',
+            cta_button_text: basePage.cta_button_text,
           };
+          batch = await generatePersonaBatch(
+            brief, forPrompt, existing, want, libraryForPrompt(library),
+            campaign.product_type, target, noteForStep(campaign, 'pages'),
+          );
+        } catch (e) {
+          return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
         }
-
-        const want = Math.min(PERSONA_BATCH, target - existing.length);
-        const rejectedNotes: string[] = [];
-        let added = 0;
-
-        for (let attempt = 1; attempt <= MAX_EMPTY_BATCHES && added === 0; attempt += 1) {
-          let batch;
-          try {
-            // Rebuild the shape rather than pass the row: ids and timestamps in the
-            // prompt are tokens spent on nothing, and invite the model to echo them.
-            const forPrompt: BasePage = {
-              page_title: basePage.page_title,
-              meta_description: basePage.meta_description ?? '',
-              hero_headline: basePage.hero_headline,
-              hero_subheadline: basePage.hero_subheadline ?? '',
-              reasons: basePage.reasons,
-              testimonials: basePage.testimonials,
-              offer_headline: basePage.offer_headline,
-              offer_body: basePage.offer_body ?? '',
-              cta_button_text: basePage.cta_button_text,
-            };
-            batch = await generatePersonaBatch(
-              brief, forPrompt, existing, want, libraryForPrompt(library),
-              campaign.product_type, target, noteForStep(campaign, 'pages'),
-            );
-          } catch (e) {
-            return fail(campaign.id, `Persona batch failed: ${(e as Error).message}`);
-          }
-          for (const r of batch.rejected) {
-            rejectedNotes.push(`dropped "${r.persona_name}": ${r.reason}`);
-          }
-          if (!batch.personas.length) continue;
-
-          const nextIndex = (existingRows?.at(-1)?.persona_index ?? 0) + 1;
-          const rows = batch.personas.slice(0, want).map((p, i) => {
-            // A picked index is only ever a number in the model's answer. Turn
-            // it into a URL here, against the row we actually stored, and refuse
-            // an index that is out of range, was marked unusable, or is already
-            // on this buyer's page. The used-set is per persona: two personas
-            // sharing a photo is fine and expected, the same photo twice on one
-            // page is the thing that reads as broken.
-            const used = new Set<number>();
-            const pick = (index: number) => {
-              if (index < 0 || used.has(index)) return null;
-              const image = library.find((l) => l.position === index);
-              if (!image?.usable) return null;
-              used.add(index);
-              return image;
-            };
-            const hero = pick(p.hero_image_index);
-            // Suffix rather than reject: the model cannot see superseded pages
-            // and has no way to avoid their slugs, so a collision is its fault
-            // in name only. `-2`, then `-3`, so the address stays readable.
-            let slug = p.slug;
-            for (let n = 2; takenSlugs.has(slug); n += 1) slug = `${p.slug}-${n}`;
-            takenSlugs.add(slug);
-
-            return {
-              campaign_id: campaign.id,
-              persona_index: nextIndex + i,
-              slug,
-              persona_name: p.persona_name,
-              primary_pain_point: p.primary_pain_point,
-              core_desire: p.core_desire,
-              angle_hook: p.angle_hook,
-              custom_topbar_notice: p.custom_topbar_notice || null,
-              custom_hero_headline: p.custom_hero_headline,
-              // Null inherits the main page's hero, which is the common case.
-              custom_hero_image_url: hero?.source_url ?? null,
-              custom_hero_image_alt: hero?.caption ?? null,
-              custom_reasons: p.custom_reasons.map((r) => {
-                const image = pick(r.image_index);
-                return {
-                  number: r.number,
-                  title: r.title,
-                  body: r.body,
-                  image_prompt: r.image_prompt,
-                  image_url: image?.source_url ?? null,
-                  image_alt: image?.caption ?? null,
-                };
-              }),
-              // An empty quote means no real review fitted. Store null, not an empty
-              // testimonial — the page renders nothing rather than an empty card.
-              proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
-            };
-          });
-          const { error } = await db.from('personas').insert(rows);
-          if (error) return fail(campaign.id, `Could not save personas: ${error.message}`);
-          added = rows.length;
+        for (const r of batch.rejected) {
+          rejectedNotes.push(`dropped "${r.persona_name}": ${r.reason}`);
         }
+        if (!batch.personas.length) continue;
 
-        if (added === 0) {
-          return fail(campaign.id,
-            `Ran ${MAX_EMPTY_BATCHES} persona batches and every persona duplicated an existing `
-            + `pain point. Stopped at ${existing.length} of ${target} rather than shipping `
-            + 'near-identical pages. The product may not support 20 genuinely different buyers.');
-        }
+        const nextIndex = (existingRows?.at(-1)?.persona_index ?? 0) + 1;
+        const rows = batch.personas.slice(0, want).map((p, i) => {
+          // A picked index is only ever a number in the model's answer. Turn
+          // it into a URL here, against the row we actually stored, and refuse
+          // an index that is out of range, was marked unusable, or is already
+          // on this buyer's page. The used-set is per persona: two personas
+          // sharing a photo is fine and expected, the same photo twice on one
+          // page is the thing that reads as broken.
+          const used = new Set<number>();
+          const pick = (index: number) => {
+            if (index < 0 || used.has(index)) return null;
+            const image = library.find((l) => l.position === index);
+            if (!image?.usable) return null;
+            used.add(index);
+            return image;
+          };
+          const hero = pick(p.hero_image_index);
+          // Suffix rather than reject: the model cannot see superseded pages
+          // and has no way to avoid their slugs, so a collision is its fault
+          // in name only. `-2`, then `-3`, so the address stays readable.
+          let slug = p.slug;
+          for (let n = 2; takenSlugs.has(slug); n += 1) slug = `${p.slug}-${n}`;
+          takenSlugs.add(slug);
 
-        const total = existing.length + added;
-        if (total >= target) {
-          await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
-        }
-        return {
-          status: total >= target ? 'pages_built' : 'personas',
-          done: total >= target,
-          waiting: false,
-          // Same reason as above: the last batch landing is not an ending, it
-          // is the handover to the scan.
-          terminal: false,
-          personas: total,
-          did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${target}).`,
-          notes: rejectedNotes,
-        };
-      } finally {
-        // Every path above returns, including the fail() ones. Releasing here
-        // rather than at each return is what keeps the next call from waiting out
-        // the five-minute expiry after an ordinary failure.
-        await db.rpc('release_persona_batch', { p_campaign: campaign.id });
+          return {
+            campaign_id: campaign.id,
+            persona_index: nextIndex + i,
+            slug,
+            persona_name: p.persona_name,
+            primary_pain_point: p.primary_pain_point,
+            core_desire: p.core_desire,
+            angle_hook: p.angle_hook,
+            custom_topbar_notice: p.custom_topbar_notice || null,
+            custom_hero_headline: p.custom_hero_headline,
+            // Null inherits the main page's hero, which is the common case.
+            custom_hero_image_url: hero?.source_url ?? null,
+            custom_hero_image_alt: hero?.caption ?? null,
+            custom_reasons: p.custom_reasons.map((r) => {
+              const image = pick(r.image_index);
+              return {
+                number: r.number,
+                title: r.title,
+                body: r.body,
+                image_prompt: r.image_prompt,
+                image_url: image?.source_url ?? null,
+                image_alt: image?.caption ?? null,
+              };
+            }),
+            // An empty quote means no real review fitted. Store null, not an empty
+            // testimonial — the page renders nothing rather than an empty card.
+            proof_quote: p.proof_quote.quote.trim() ? p.proof_quote : null,
+          };
+        });
+        const { error } = await db.from('personas').insert(rows);
+        if (error) return fail(campaign.id, `Could not save personas: ${error.message}`);
+        added = rows.length;
       }
+
+      if (added === 0) {
+        return fail(campaign.id,
+          `Ran ${MAX_EMPTY_BATCHES} persona batches and every persona duplicated an existing `
+          + `pain point. Stopped at ${existing.length} of ${target} rather than shipping `
+          + 'near-identical pages. The product may not support 20 genuinely different buyers.');
+      }
+
+      const total = existing.length + added;
+      if (total >= target) {
+        await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
+      }
+      return {
+        status: total >= target ? 'pages_built' : 'personas',
+        done: total >= target,
+        waiting: false,
+        // Same reason as above: the last batch landing is not an ending, it
+        // is the handover to the scan.
+        terminal: false,
+        personas: total,
+        did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${target}).`,
+        notes: rejectedNotes,
+      };
     }
 
     // ── queue the ad-library scan ───────────────────────────────────────
@@ -967,18 +1002,9 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         .select('position, source_url, caption')
         .eq('campaign_id', campaign.id).eq('usable', true).order('position');
 
-      // The same per-campaign driver lock the persona batches use. Two tabs are
-      // two drivers, both would read "this persona has no ideas", and the loser
-      // would pay for a generation the unique index then rejects.
-      const { data: gotLock } = await db.rpc('claim_persona_batch', { p_campaign: campaign.id });
-      if (!gotLock) {
-        return {
-          status: 'writing_ideas', done: false, waiting: true, terminal: false,
-          did: 'Another tab is writing this campaign\'s ideas. Waiting for it rather than '
-            + 'writing them twice.',
-        };
-      }
-
+      // Same driver lock as everywhere else, held by advance() around this whole
+      // unit: without it two drivers both read "this buyer has no ideas" and the
+      // loser pays for a generation the unique index then rejects.
       // An ad's destination has to be an absolute URL — Meta will not accept a
       // path, and a relative one written into sixty rows is sixty ads pointing
       // nowhere. Better to stop here than to write them.
@@ -1039,8 +1065,6 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
       } catch (e) {
         return fail(campaign.id, `Could not write the ideas for ${next.persona_name}: `
           + (e as Error).message);
-      } finally {
-        await db.rpc('release_persona_batch', { p_campaign: campaign.id });
       }
     }
 

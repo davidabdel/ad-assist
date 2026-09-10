@@ -50,6 +50,7 @@ type Persona = {
 type Job = {
   kind: string; status: string; error_message: string | null; notes: string | null;
   region: string | null; media_type: string | null; search_terms: string[] | null;
+  created_at: string; claimed_at: string | null;
 };
 
 /**
@@ -87,6 +88,10 @@ type ScannedAd = {
 type ScanSummary = {
   jobsTotal: number;
   jobsDone: number;
+  /** Claimed and being read. See `scanJobsRunning` in campaign-live. */
+  jobsRunning: number;
+  /** When the longest-running search was claimed. ISO, or null if none is. */
+  readingSince: string | null;
   jobsFailed: number;
   adsFound: number;
   adsQualified: number;
@@ -141,6 +146,12 @@ type CampaignView = {
     id: string; title: string; slug: string; status: string;
     /** When the row last changed. The only reliable "still since" across a reload. */
     updated_at: string;
+    /**
+     * When a driver claimed this campaign, or null when nothing holds it. Held
+     * for one unit of work and cleared after, so a value here means something
+     * is mid-step RIGHT NOW — this tab, another tab, or the server tick.
+     */
+    driver_lock_at: string | null;
     source_url: string | null; error_message: string | null; has_brief: boolean;
     base_page_guidance: string | null;
     /** The note left on each step, keyed by step key. */
@@ -411,6 +422,22 @@ export function CampaignProgress({ id }: { id: string }) {
     return () => document.removeEventListener('visibilitychange', resume);
   }, [drive, view?.campaign.status]);
 
+  /**
+   * Watch, as well as drive.
+   *
+   * This screen used to refresh only inside its own driving loop, which was
+   * sound while the loop was the only thing that could move a campaign. It is
+   * not any more — the server tick drives it too, so that a locked phone no
+   * longer stops the run — and a screen that only looks when it is working
+   * would show a frozen page while the pages were being written behind it.
+   */
+  useEffect(() => {
+    const status = view?.campaign.status;
+    if (running || status === 'ideas_ready' || status === 'failed') return undefined;
+    const t = setInterval(() => { void refresh().catch(() => {}); }, 5000);
+    return () => clearInterval(t);
+  }, [running, view?.campaign.status, refresh]);
+
   // Stops itself once nothing can change, so a settled campaign is not a page
   // re-rendering once a second all afternoon.
   const settled = view?.campaign.status === 'ideas_ready' && !running;
@@ -559,6 +586,20 @@ export function CampaignProgress({ id }: { id: string }) {
   const waitingOnIngest = ingest?.status === 'queued' || ingest?.status === 'running';
   const waitingOnScan = scanJobs.some((j) => j.status === 'queued' || j.status === 'running');
   const waitingOnMac = !failed && !finished && (waitingOnIngest || waitingOnScan);
+  // A queued job that nothing has claimed is the ONLY case the "start the
+  // worker" instructions answer. A claimed one wants the opposite advice —
+  // leave it alone — and showing the Terminal box under both is what made a
+  // healthy four-minute search look like something the operator had to fix.
+  const unclaimed = jobs.filter((j) => j.status === 'queued' && !j.claimed_at);
+  const queuedSinceMs = unclaimed
+    .map((j) => Date.parse(j.created_at)).filter((t) => !Number.isNaN(t))
+    .reduce<number | null>((a, t) => (a === null || t < a ? t : a), null);
+  // A live worker polls every five seconds, so a job unclaimed for half a
+  // minute means no worker — while a two-second gap on a healthy run means
+  // nothing at all and must not flash a warning box at him.
+  const NO_WORKER_AFTER_MS = 30_000;
+  const noWorkerRunning = waitingOnMac && queuedSinceMs !== null
+    && now - queuedSinceMs > NO_WORKER_AFTER_MS;
   // The gate is open only when the page it is gating actually exists. At
   // `base_review` with no row yet, the page is still being written.
   const awaitingApproval = campaign.status === 'base_review' && Boolean(basePage);
@@ -590,17 +631,43 @@ export function CampaignProgress({ id }: { id: string }) {
   });
 
   const movedAt = Math.max(changeAt ?? 0, Date.parse(campaign.updated_at) || 0);
+  const sinceChangeMs = movedAt ? now - movedAt : null;
+
+  /**
+   * Something other than this tab is driving it.
+   *
+   * Two signals, because neither is sufficient alone. The lock is the direct
+   * one — held for the length of a unit, so it means "mid-step at this
+   * instant" — but it is released and retaken BETWEEN units, and a poll landing
+   * in that gap would flash "Not running" over a perfectly healthy run. Recent
+   * movement covers the gap.
+   *
+   * The lock is only believed while it is young. A driver that dies holding it
+   * leaves it set until the five-minute expiry, and five minutes of a screen
+   * insisting that something is working is the exact lie this strip exists to
+   * stop telling. Two minutes is longer than the slowest unit and shorter than
+   * anyone's patience.
+   */
+  const LOCK_TRUSTED_MS = 120_000;
+  const MOVED_RECENTLY_MS = 20_000;
+  const lockMs = campaign.driver_lock_at ? now - Date.parse(campaign.driver_lock_at) : null;
+  const drivenElsewhere = (lockMs !== null && lockMs >= 0 && lockMs < LOCK_TRUSTED_MS)
+    || (sinceChangeMs !== null && sinceChangeMs < MOVED_RECENTLY_MS);
 
   // The single answer to "is this frozen". Built from the campaign AND from
   // what this browser is doing, because either one alone can be wrong about it.
   const live = describeLive({
     running,
+    drivenElsewhere,
+    // A Mac job that has actually been claimed. Reading carries on with no tab
+    // open at all, so it outranks every "nothing is driving this" sentence.
+    macReading: ingest?.status === 'running' || scan.jobsRunning > 0,
     inFlightMs: inFlightAt === null ? null : now - inFlightAt,
     sinceTickMs: tickAt === null ? null : now - tickAt,
     // What this screen has watched change, or — before it has watched anything
     // — when the row itself last moved. Whichever is later is the truth. Zero
     // means neither is known, and no clock is better than a clock reading 1970.
-    sinceChangeMs: movedAt ? now - movedAt : null,
+    sinceChangeMs,
     stepTitle: steps.find((s) => s.state === 'active')?.title
       // `pages_built` lights no step: the pages are done and the scan has not
       // been queued yet. It is a real second of a real run, not a gap.
@@ -612,6 +679,10 @@ export function CampaignProgress({ id }: { id: string }) {
     waitingOnMac,
     scanJobsDone: scan.jobsDone,
     scanJobsTotal: scan.jobsTotal,
+    scanJobsRunning: scan.jobsRunning,
+    readingMs: scan.readingSince === null || Number.isNaN(Date.parse(scan.readingSince))
+      ? null
+      : now - Date.parse(scan.readingSince),
   });
 
   return (
@@ -638,7 +709,11 @@ export function CampaignProgress({ id }: { id: string }) {
         ) : null}
       </div>
 
-      {waitingOnMac ? (
+      {/* Gated on nothing having CLAIMED the work, not on the work being
+          unfinished. A search that Chrome is reading right now is unfinished
+          too, and telling him to open Terminal over a healthy run is how the
+          screen made a working four-minute scan look like his problem. */}
+      {noWorkerRunning ? (
         <div className="mb-6">
           <Callout
             tone="warn"

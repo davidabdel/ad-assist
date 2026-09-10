@@ -49,6 +49,8 @@ console.log('\nthe one line that answers "is it frozen"');
 /** Everything healthy and mid-run, unless a case below says otherwise. */
 const RUNNING = {
   running: true,
+  drivenElsewhere: false,
+  macReading: false,
   inFlightMs: 2_000,
   sinceTickMs: 3_000,
   sinceChangeMs: 4_000,
@@ -60,6 +62,8 @@ const RUNNING = {
   waitingOnMac: false,
   scanJobsDone: 0,
   scanJobsTotal: 0,
+  scanJobsRunning: 0,
+  readingMs: null,
 };
 
 const working = describeLive(RUNNING);
@@ -89,6 +93,62 @@ check('and never claims to be reading anything',
   !/reading|working on|studying/i.test(stalled.detail), stalled.detail);
 check('and says how long it has been still',
   stalled.clock === 'Nothing has moved for 8 minutes.', stalled.clock);
+
+// THE ONE THAT WOULD GO WRONG NEXT. Same campaign, same dead tab — but the
+// server is driving it now, which is the entire point of the tick. A screen
+// that called this "Not running" would be the same lie pointing the other way.
+const elsewhere = describeLive({
+  ...RUNNING,
+  running: false,
+  drivenElsewhere: true,
+  inFlightMs: null,
+  sinceTickMs: null,
+  sinceChangeMs: 6_000,
+  stepTitle: 'Writing 20 landing pages',
+});
+check('a run driven by the server is Working, not Not running',
+  elsewhere.kind === 'working', `${elsewhere.kind} / ${elsewhere.headline}`);
+check('and says it does not need the screen',
+  /without this screen/i.test(elsewhere.detail), elsewhere.detail);
+check('and clocks the campaign rather than this tab\'s own idle loop',
+  elsewhere.clock === 'Last moved 6 seconds ago.', elsewhere.clock);
+
+// A claimed search carries on with no tab open at all, so it outranks the
+// "nothing is driving this" sentence rather than being hidden behind it.
+const readingNoTab = describeLive({
+  ...RUNNING,
+  running: false,
+  drivenElsewhere: false,
+  macReading: true,
+  waitingOnMac: true,
+  inFlightMs: null,
+  sinceTickMs: null,
+  scanJobsDone: 0,
+  scanJobsTotal: 2,
+  scanJobsRunning: 1,
+  readingMs: 200_000,
+});
+check('a search being read outranks a dead tab',
+  readingNoTab.kind === 'waiting-for-mac' && readingNoTab.headline === 'Reading on your Mac',
+  readingNoTab.headline);
+check('and "0 of 2" never again means nothing is happening',
+  readingNoTab.detail.includes('reading another one right now'), readingNoTab.detail);
+check('and counts the reading, not the polling',
+  readingNoTab.clock === 'Reading for 3 minutes.', readingNoTab.clock);
+
+// The opposite case, which wants the opposite advice: queued, and nothing has
+// picked it up.
+const unclaimed = describeLive({
+  ...RUNNING,
+  waitingOnMac: true,
+  inFlightMs: null,
+  scanJobsDone: 0,
+  scanJobsTotal: 2,
+  scanJobsRunning: 0,
+});
+check('an unclaimed search says nothing has picked it up',
+  unclaimed.headline === 'Waiting on your Mac' && /has picked/.test(unclaimed.detail),
+  unclaimed.detail);
 
 const mac = describeLive({
   ...RUNNING, waitingOnMac: true, inFlightMs: null,
@@ -204,8 +264,118 @@ const { data: again } = await db.from('scanner_jobs')
 check('and does not queue a second set', again.length === queued.length,
   `${queued.length} → ${again.length}`);
 
+// ── the same work, with no browser anywhere near it ────────────────
+//
+// The tab is no longer the engine. This is the proof: a campaign is driven from
+// nothing but a POST carrying a shared secret — no session, no access token, no
+// page open — which is what makes a locked phone stop mattering.
+console.log('\nit runs with no screen open');
+
+/** Seeds a fresh campaign at pages_built with its pages already written. */
+async function seedAtPagesBuilt(label) {
+  const { data: c, error } = await db.from('campaigns').insert({
+    user_id: userId,
+    title: label,
+    slug: `${label}-${Date.now()}`,
+    source_url: 'https://example.com/thing',
+    region: 'AU',
+    status: 'pages_built',
+    persona_target: 2,
+    scraped_data: { raw: { url: 'https://example.com/thing' }, brief: { product_name: 'Thing' } },
+  }).select('id').single();
+  if (error) throw new Error(`could not seed ${label}: ${error.message}`);
+  const { error: e2 } = await db.from('personas').insert([1, 2].map((n) => ({
+    campaign_id: c.id,
+    persona_index: n,
+    slug: `buyer-${n}`,
+    persona_name: `Buyer ${n}`,
+    primary_pain_point: 'x',
+    core_desire: 'y',
+    angle_hook: 'z',
+    custom_hero_headline: 'h',
+    custom_reasons: [],
+  })));
+  if (e2) throw new Error(`could not seed ${label} personas: ${e2.message}`);
+  return c.id;
+}
+
+/**
+ * Always scoped to one campaign. An unscoped tick drives everything drivable,
+ * which on this database means somebody's real campaigns and real model calls.
+ */
+const tick = async (campaignId, secret = SVC) => {
+  const res = await fetch(`${BASE}/api/tick`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ campaign_id: campaignId }),
+  });
+  return { status: res.status, body: await res.json() };
+};
+
+const tickId = await seedAtPagesBuilt('tick-check');
+
+const noAuth = await fetch(`${BASE}/api/tick`, { method: 'POST' });
+check('the tick refuses an unsigned request', noAuth.status === 401, `${noAuth.status}`);
+const wrongAuth = await tick(tickId, 'not-the-secret');
+check('and a wrong secret', wrongAuth.status === 401, `${wrongAuth.status}`);
+
+const ticked = await tick(tickId);
+check('the tick is 200', ticked.status === 200, JSON.stringify(ticked.body).slice(0, 200));
+const drove = (ticked.body.driven ?? []).find((d) => d.id === tickId);
+check('it drove the campaign with no session at all', Boolean(drove),
+  JSON.stringify(ticked.body).slice(0, 200));
+check('from pages_built to scanning', drove?.to === 'scanning', drove?.to);
+check('and stopped because the Mac has it now, not because it ran out',
+  drove?.stopped === 'waiting', drove?.stopped);
+
+const { data: tickJobs } = await db.from('scanner_jobs')
+  .select('id').eq('campaign_id', tickId).eq('kind', 'ad_scan');
+check('the searches were queued by the tick', (tickJobs?.length ?? 0) > 0,
+  `${tickJobs?.length ?? 0} jobs`);
+
+// The Mac pokes this every ten seconds forever. A tick that queued a second set
+// each time would be six duplicate scans a minute.
+await tick(tickId);
+const { data: tickJobsAgain } = await db.from('scanner_jobs')
+  .select('id').eq('campaign_id', tickId).eq('kind', 'ad_scan');
+check('a second tick does not queue a second set',
+  tickJobsAgain.length === tickJobs.length, `${tickJobs.length} → ${tickJobsAgain.length}`);
+
+// ── the approval gate still stops it ───────────────────────────────
+//
+// The whole point of the tick is that it does not need permission to carry on.
+// The base page is the one place it must ask anyway.
+const { data: parked, error: parkErr } = await db.from('campaigns').insert({
+  user_id: userId,
+  title: 'tick-gate-check',
+  slug: `tick-gate-${Date.now()}`,
+  source_url: 'https://example.com/thing',
+  region: 'AU',
+  status: 'base_review',
+  persona_target: 2,
+  scraped_data: { raw: { url: 'https://example.com/thing' }, brief: { product_name: 'Thing' } },
+}).select('id').single();
+if (parkErr) throw new Error(`could not seed the parked campaign: ${parkErr.message}`);
+const { error: bpErr } = await db.from('base_pages').insert({
+  campaign_id: parked.id,
+  page_title: 'Thing',
+  hero_headline: 'A thing',
+  reasons: [],
+  offer_headline: 'Buy the thing',
+  cta_button_text: 'Buy',
+  cta_url: 'https://example.com/thing',
+});
+if (bpErr) throw new Error(`could not seed the base page: ${bpErr.message}`);
+
+const gated = await tick(parked.id);
+check('a page waiting for approval is left alone',
+  (gated.body.driven ?? []).length === 0, JSON.stringify(gated.body).slice(0, 200));
+const { data: stillParked } = await db.from('campaigns')
+  .select('status').eq('id', parked.id).single();
+check('and stays exactly where it is', stillParked.status === 'base_review', stillParked.status);
+
 // ── tidy up ────────────────────────────────────────────────────────
-await db.from('campaigns').delete().eq('id', campaign.id);
+await db.from('campaigns').delete().in('id', [campaign.id, tickId, parked.id]);
 await db.auth.admin.deleteUser(userId);
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);

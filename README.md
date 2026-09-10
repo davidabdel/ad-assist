@@ -21,6 +21,11 @@ inbound connection to the Mac — the worker polls, claims a row with
 **a campaign cannot start while the Mac is asleep.** The UI says so rather than
 looking stuck.
 
+The worker also **drives the pipeline**, by POSTing `/api/tick` every ten
+seconds. It does none of that work itself — the writing stays on the server —
+it only says "keep going", which is all an open browser tab was ever doing. See
+the pipeline section below for why that moved.
+
 ## Running it
 
 ```bash
@@ -50,11 +55,24 @@ and the live model — this one **spends money**:
 ## The pipeline
 
 Each `POST /api/campaigns/{id}/advance` does **one unit of work** and returns.
-A dashboard polls it. The unit is small on purpose: the full run is several
-minutes of model time, which is longer than a serverless function may live, so
-splitting it means the work survives a timeout, a deploy, or a closed laptop.
-There is no in-memory progress — `campaigns.status` plus the rows that exist
-**is** the progress, and every unit is idempotent.
+The unit is small on purpose: the full run is several minutes of model time,
+which is longer than a serverless function may live, so splitting it means the
+work survives a timeout, a deploy, or a closed laptop. There is no in-memory
+progress — `campaigns.status` plus the rows that exist **is** the progress, and
+every unit is idempotent.
+
+**Two things call it, and neither can stop the other.** The dashboard, while it
+is open; and `POST /api/tick`, which drives every campaign that has somewhere to
+go. The tick exists because the dashboard used to be the only driver: lock a
+phone, the tab freezes mid-wait with no error, and the run stops until somebody
+looks at the screen again. `advance()` takes a per-campaign lock for the whole
+unit, so two drivers is the ordinary case rather than a race — the second one is
+told to wait.
+
+**The tick is poked by the Mac worker, not by Vercel Cron.** This project is on
+the Hobby plan, where a cron job fires once a *day*. On Pro it becomes a `crons`
+entry in `vercel.json` against the same path, with `CRON_SECRET` set — the route
+already accepts Vercel's header format, so nothing else changes.
 
 | Status | What the next `advance` does |
 |---|---|

@@ -45,8 +45,25 @@ export type LiveStatus = {
 };
 
 export type LiveInput = {
-  /** The driving loop is alive. */
+  /** The driving loop in THIS tab is alive. */
   running: boolean;
+  /**
+   * Something other than this screen is driving the campaign right now — the
+   * server tick, or another tab. Read from the driver lock, which is held for
+   * the length of one unit and cleared after, so it means "mid-step at this
+   * instant" rather than "started at some point".
+   *
+   * The run no longer belongs to the browser (see `app/api/tick`). Without this
+   * the screen would report "Not running" over a campaign writing its pages
+   * perfectly well without it — the same class of lie as the sentence this file
+   * was written to kill, just pointing the other way.
+   */
+  drivenElsewhere: boolean;
+  /**
+   * A Mac-side job is claimed and being read at this moment. Not the same as
+   * `waitingOnMac`, which is also true of a job nothing has picked up.
+   */
+  macReading: boolean;
   /** How long the current advance() call has been outstanding, or null. */
   inFlightMs: number | null;
   /** Since the last advance() call came back. Null before the first one. */
@@ -63,6 +80,16 @@ export type LiveInput = {
   /** Only meaningful while waiting on the Mac. */
   scanJobsDone: number;
   scanJobsTotal: number;
+  /**
+   * Searches a worker has actually claimed and is reading. `scanJobsDone`
+   * counts only FINISHED searches, so a search being read right now counts as
+   * zero — indistinguishable, on the count alone, from one nothing has picked
+   * up. A search takes minutes. That is how "0 of 2 searches done" sat on the
+   * screen for four minutes while Chrome was flat out, with nothing to say so.
+   */
+  scanJobsRunning: number;
+  /** How long the longest-running search has been claimed, or null. */
+  readingMs: number | null;
 };
 
 /** "4 seconds" · "2 minutes" · "1 hour 5 minutes". Words, not 00:04. */
@@ -85,10 +112,43 @@ export function humanDuration(ms: number): string {
  */
 export function describeLive(input: LiveInput): LiveStatus {
   const {
-    running, inFlightMs, sinceTickMs, sinceChangeMs, stepTitle,
+    running, drivenElsewhere, macReading, inFlightMs, sinceTickMs, sinceChangeMs, stepTitle,
     failed, errorMessage, finished, awaitingApproval, waitingOnMac,
-    scanJobsDone, scanJobsTotal,
+    scanJobsDone, scanJobsTotal, scanJobsRunning, readingMs,
   } = input;
+
+  /**
+   * Needed in two places: once above the "is anything driving this" check, for
+   * a search that is genuinely being read, and once below it for one that is
+   * queued and unclaimed. The two cases want opposite things from the operator
+   * — patience, or a worker started — and the count alone cannot separate them,
+   * which is exactly what "0 of 2 searches done" got wrong for four minutes.
+   */
+  function macStatus(): LiveStatus {
+    const reading = scanJobsRunning > 0;
+    const unclaimed = Math.max(0, scanJobsTotal - scanJobsDone - scanJobsRunning);
+    return {
+      kind: 'waiting-for-mac',
+      headline: reading || !scanJobsTotal ? 'Reading on your Mac' : 'Waiting on your Mac',
+      detail: !scanJobsTotal
+        ? 'Chrome on your Mac is reading a page that refuses a plain request.'
+        : reading
+          ? `${scanJobsDone} of ${scanJobsTotal} searches done, and Chrome on your Mac is `
+            + `reading ${scanJobsRunning === 1 ? 'another one' : `${scanJobsRunning} more`} `
+            + `right now${unclaimed ? `, with ${unclaimed} still to start` : ''}. A search `
+            + 'takes a few minutes. Costs nothing.'
+          : `${scanJobsDone} of ${scanJobsTotal} searches done. Nothing on your Mac has picked `
+            + `up the ${unclaimed === 1 ? 'last one' : `remaining ${unclaimed}`} yet — Meta only `
+            + 'shows its ad library to a real browser, so this needs the worker running.',
+      // While a search is genuinely in flight, the honest number is how long
+      // THAT has been going. Otherwise it is how recently we looked — never
+      // time-since-change, which on a four-minute search reads as broken while
+      // it is working perfectly.
+      clock: reading && readingMs !== null
+        ? `Reading for ${humanDuration(readingMs)}.`
+        : sinceTickMs === null ? '' : `Checked ${humanDuration(sinceTickMs)} ago.`,
+    };
+  }
 
   if (failed) {
     return {
@@ -125,44 +185,55 @@ export function describeLive(input: LiveInput): LiveStatus {
     };
   }
 
-  // Before the campaign gets to describe itself. A screen that is not driving
-  // anything must say so even when the campaign's own status sounds busy —
-  // this is the exact case that produced "Now reading Meta's ad library" over a
+  // Above the "is anything driving this" check, because the reading is not
+  // driven by the loop at all: a search Chrome has claimed carries on whether
+  // or not a tab is open, and a screen that called that "Not running" would be
+  // wrong about a machine visibly working.
+  if (waitingOnMac && macReading) {
+    return macStatus();
+  }
+
+  // Before the campaign gets to describe itself. A screen with nothing behind
+  // it must say so even when the campaign's own status sounds busy — this is
+  // the exact case that produced "Now reading Meta's ad library" over a
   // campaign that had been motionless for eight minutes.
-  if (!running) {
+  if (!running && !drivenElsewhere) {
     return {
       kind: 'stopped',
       headline: 'Not running',
-      detail: 'The work is driven from this page, and this page is not driving it. Nothing '
-        + 'is lost — press Carry on, or reload, and it picks up exactly where it stopped.',
+      detail: 'Nothing is driving this campaign — not this page, and not your Mac. Nothing is '
+        + 'lost: press Carry on, or leave the worker running on your Mac, and it picks up '
+        + 'exactly where it stopped.',
       clock: sinceChangeMs === null ? '' : `Nothing has moved for ${humanDuration(sinceChangeMs)}.`,
     };
   }
 
   if (waitingOnMac) {
-    return {
-      kind: 'waiting-for-mac',
-      headline: 'Waiting on your Mac',
-      detail: scanJobsTotal
-        ? `${scanJobsDone} of ${scanJobsTotal} searches done. Meta only shows its ad library `
-          + 'to a real browser, so Chrome on your Mac is doing the reading. Costs nothing.'
-        : 'Chrome on your Mac is reading a page that refuses a plain request.',
-      // Deliberately the time since the last CHECK, not since the last change.
-      // A search takes minutes, so "nothing has changed for 4 minutes" would
-      // read as broken while it is working perfectly.
-      clock: sinceTickMs === null ? '' : `Checked ${humanDuration(sinceTickMs)} ago.`,
-    };
+    return macStatus();
   }
 
   return {
     kind: 'working',
     headline: 'Working',
-    detail: stepTitle ?? 'Working through the next step.',
+    detail: drivenElsewhere && !running
+      // Worth a sentence rather than the bare step title: this is the case the
+      // whole tick exists for, and an operator who has just watched a run die
+      // behind a locked phone needs telling in words that it no longer can.
+      ? `${stepTitle ?? 'Working through the next step'} — carrying on without this screen, `
+        + 'so you can close it.'
+      : stepTitle ?? 'Working through the next step.',
     // Two genuinely different things, and saying which is which is what makes
     // the number trustworthy: a call that has been outstanding four minutes is
     // a long step, not a hang, and the screen should not have to guess.
-    clock: inFlightMs !== null
-      ? `This step has been going ${humanDuration(inFlightMs)}.`
-      : sinceTickMs === null ? 'Starting…' : `Checked ${humanDuration(sinceTickMs)} ago.`,
+    //
+    // Neither applies when the work is somewhere else: this tab has made no
+    // calls, so both of its own clocks read as if it had just woken up. What is
+    // honest then is when the campaign itself last moved.
+    clock: !running && drivenElsewhere
+      ? (sinceChangeMs === null ? '' : `Last moved ${humanDuration(sinceChangeMs)} ago.`)
+      : inFlightMs !== null
+        ? `This step has been going ${humanDuration(inFlightMs)}.`
+        : sinceTickMs === null ? 'Starting…' : `Checked ${humanDuration(sinceTickMs)} ago.`,
   };
+
 }

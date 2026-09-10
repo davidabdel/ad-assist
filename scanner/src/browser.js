@@ -38,8 +38,38 @@ async function portAlive(port) {
 
 let launched = null;
 
+/**
+ * Two jobs starting together both probe a dead port, both spawn Chrome against
+ * the SAME --user-data-dir, and the second dies on the profile lock — leaving a
+ * failed job next to a working one for no reason a log would explain. So the
+ * launch is serialised: the first caller in owns this promise, everyone else
+ * waits on it and then re-probes.
+ */
+let launching = null;
+
 /** Connect to our Chrome, starting it if it isn't already up. */
 export async function getBrowser({ headless = false } = {}) {
+  if (!(await portAlive(PORT))) {
+    if (launching) await launching.catch(() => {});
+    else {
+      launching = launchChrome(headless);
+      try { await launching; } finally { launching = null; }
+    }
+    if (!(await portAlive(PORT))) {
+      throw new Error(`Chrome did not open a debug port on ${PORT}`);
+    }
+  }
+
+  return puppeteer.connect({
+    browserURL: `http://127.0.0.1:${PORT}`,
+    defaultViewport: { width: 1440, height: 900 },
+  });
+}
+
+async function launchChrome(headless) {
+  // Re-probed inside the mutex: by the time a queued caller gets here the
+  // first one has usually already started it, and spawning a second Chrome
+  // over a live profile is the exact failure this guard exists to prevent.
   if (!(await portAlive(PORT))) {
     mkdirSync(PROFILE, { recursive: true });
     const args = [
@@ -61,15 +91,7 @@ export async function getBrowser({ headless = false } = {}) {
       if (await portAlive(PORT)) break;
       await sleep(250);
     }
-    if (!(await portAlive(PORT))) {
-      throw new Error(`Chrome did not open a debug port on ${PORT}`);
-    }
   }
-
-  return puppeteer.connect({
-    browserURL: `http://127.0.0.1:${PORT}`,
-    defaultViewport: { width: 1440, height: 900 },
-  });
 }
 
 /** A fresh page with the automation tells filed off. */
