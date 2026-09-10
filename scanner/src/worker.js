@@ -34,6 +34,19 @@ import { scanAdLibrary } from './adlibrary.js';
 const WORKER_ID = process.env.SCANNER_WORKER_ID || `mac-${process.pid}`;
 const POLL_MS = Number(process.env.SCANNER_POLL_MS || 5000);
 const HEARTBEAT_MS = 30_000;
+/**
+ * How many jobs this worker runs at once.
+ *
+ * One at a time meant a campaign's two searches took eight minutes rather than
+ * four, with the second sitting untouched — and the screen had no word for a
+ * queued-but-unclaimed job, so it read as a stall. Each job is its own Chrome
+ * tab in the one shared browser, so the cost of a second is a tab, not a
+ * browser.
+ *
+ * Three rather than more because they are all reading the same site: Meta
+ * throttles, and a worker that trips that turns a slow scan into a failed one.
+ */
+const CONCURRENCY = Math.max(1, Number(process.env.SCANNER_CONCURRENCY || 3));
 const ONCE = process.argv.includes('--once');
 
 function db() {
@@ -189,10 +202,14 @@ async function runJob(client, job) {
 
 async function main() {
   const client = db();
-  console.log(`ad-assist worker "${WORKER_ID}" — ${ONCE ? 'single job' : 'polling'}`);
+  console.log(`ad-assist worker "${WORKER_ID}" — ${ONCE ? 'single job' : `polling, up to ${CONCURRENCY} at once`}`);
   console.log('Chrome runs headful, so leave the Mac awake while jobs are queued.\n');
 
   let idle = 0;
+  // Jobs in flight right now. Each is its own Chrome tab and its own
+  // heartbeat, so they neither block nor steal from one another.
+  const active = new Set();
+
   for (;;) {
     // Free anything a dead worker left holding before looking for new work.
     // PostgrestBuilder is thenable but not a Promise — it has no .catch(), so
@@ -202,17 +219,36 @@ async function main() {
     if (reapError) console.warn(`  reap failed: ${reapError.message}`);
     else if (reaped) console.log(`  requeued ${reaped} stale job(s)`);
 
-    const job = await claimOne(client);
-    if (job) {
-      idle = 0;
-      await runJob(client, job);
-      if (ONCE) return;
-      continue;
+    // Fill up to the cap. claim_job hands back one row at a time and takes it
+    // atomically, so calling it in a loop is safe with other workers running —
+    // which is the normal case here, launchd's and a Terminal one.
+    let claimed = 0;
+    while (active.size < (ONCE ? 1 : CONCURRENCY)) {
+      const job = await claimOne(client);
+      if (!job) break;
+      claimed += 1;
+      // runJob never rejects — it records the failure on the row — so this
+      // needs no catch, and must not have one that could swallow a real bug.
+      const p = runJob(client, job).finally(() => active.delete(p));
+      active.add(p);
+      if (ONCE) break;
     }
+
     if (ONCE) {
-      console.log('Nothing queued.');
+      if (!active.size) console.log('Nothing queued.');
+      await Promise.all(active);
       return;
     }
+
+    if (claimed) { idle = 0; continue; }
+
+    if (active.size) {
+      // At capacity, or waiting out the last one. Wake the moment a slot frees
+      // rather than sitting through a full poll interval with work queued.
+      await Promise.race([...active, sleep(POLL_MS)]);
+      continue;
+    }
+
     if (idle % 12 === 0) process.stdout.write(`\rwaiting for work… ${new Date().toLocaleTimeString()}   `);
     idle += 1;
     await sleep(POLL_MS);

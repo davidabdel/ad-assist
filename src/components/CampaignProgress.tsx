@@ -50,6 +50,7 @@ type Persona = {
 type Job = {
   kind: string; status: string; error_message: string | null; notes: string | null;
   region: string | null; media_type: string | null; search_terms: string[] | null;
+  created_at: string; claimed_at: string | null;
 };
 
 /**
@@ -87,6 +88,10 @@ type ScannedAd = {
 type ScanSummary = {
   jobsTotal: number;
   jobsDone: number;
+  /** Claimed and being read. See `scanJobsRunning` in campaign-live. */
+  jobsRunning: number;
+  /** When the longest-running search was claimed. ISO, or null if none is. */
+  readingSince: string | null;
   jobsFailed: number;
   adsFound: number;
   adsQualified: number;
@@ -559,6 +564,20 @@ export function CampaignProgress({ id }: { id: string }) {
   const waitingOnIngest = ingest?.status === 'queued' || ingest?.status === 'running';
   const waitingOnScan = scanJobs.some((j) => j.status === 'queued' || j.status === 'running');
   const waitingOnMac = !failed && !finished && (waitingOnIngest || waitingOnScan);
+  // A queued job that nothing has claimed is the ONLY case the "start the
+  // worker" instructions answer. A claimed one wants the opposite advice —
+  // leave it alone — and showing the Terminal box under both is what made a
+  // healthy four-minute search look like something the operator had to fix.
+  const unclaimed = jobs.filter((j) => j.status === 'queued' && !j.claimed_at);
+  const queuedSinceMs = unclaimed
+    .map((j) => Date.parse(j.created_at)).filter((t) => !Number.isNaN(t))
+    .reduce<number | null>((a, t) => (a === null || t < a ? t : a), null);
+  // A live worker polls every five seconds, so a job unclaimed for half a
+  // minute means no worker — while a two-second gap on a healthy run means
+  // nothing at all and must not flash a warning box at him.
+  const NO_WORKER_AFTER_MS = 30_000;
+  const noWorkerRunning = waitingOnMac && queuedSinceMs !== null
+    && now - queuedSinceMs > NO_WORKER_AFTER_MS;
   // The gate is open only when the page it is gating actually exists. At
   // `base_review` with no row yet, the page is still being written.
   const awaitingApproval = campaign.status === 'base_review' && Boolean(basePage);
@@ -612,6 +631,10 @@ export function CampaignProgress({ id }: { id: string }) {
     waitingOnMac,
     scanJobsDone: scan.jobsDone,
     scanJobsTotal: scan.jobsTotal,
+    scanJobsRunning: scan.jobsRunning,
+    readingMs: scan.readingSince === null || Number.isNaN(Date.parse(scan.readingSince))
+      ? null
+      : now - Date.parse(scan.readingSince),
   });
 
   return (
@@ -638,7 +661,11 @@ export function CampaignProgress({ id }: { id: string }) {
         ) : null}
       </div>
 
-      {waitingOnMac ? (
+      {/* Gated on nothing having CLAIMED the work, not on the work being
+          unfinished. A search that Chrome is reading right now is unfinished
+          too, and telling him to open Terminal over a healthy run is how the
+          screen made a working four-minute scan look like his problem. */}
+      {noWorkerRunning ? (
         <div className="mb-6">
           <Callout
             tone="warn"

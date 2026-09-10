@@ -63,6 +63,16 @@ export type LiveInput = {
   /** Only meaningful while waiting on the Mac. */
   scanJobsDone: number;
   scanJobsTotal: number;
+  /**
+   * Searches a worker has actually claimed and is reading. `scanJobsDone`
+   * counts only FINISHED searches, so a search being read right now counts as
+   * zero — indistinguishable, on the count alone, from one nothing has picked
+   * up. A search takes minutes. That is how "0 of 2 searches done" sat on the
+   * screen for four minutes while Chrome was flat out, with nothing to say so.
+   */
+  scanJobsRunning: number;
+  /** How long the longest-running search has been claimed, or null. */
+  readingMs: number | null;
 };
 
 /** "4 seconds" · "2 minutes" · "1 hour 5 minutes". Words, not 00:04. */
@@ -87,7 +97,7 @@ export function describeLive(input: LiveInput): LiveStatus {
   const {
     running, inFlightMs, sinceTickMs, sinceChangeMs, stepTitle,
     failed, errorMessage, finished, awaitingApproval, waitingOnMac,
-    scanJobsDone, scanJobsTotal,
+    scanJobsDone, scanJobsTotal, scanJobsRunning, readingMs,
   } = input;
 
   if (failed) {
@@ -140,17 +150,30 @@ export function describeLive(input: LiveInput): LiveStatus {
   }
 
   if (waitingOnMac) {
+    // The count alone cannot separate these two, and they want opposite things
+    // from the operator: one wants patience, the other wants a worker started.
+    const reading = scanJobsRunning > 0;
+    const unclaimed = Math.max(0, scanJobsTotal - scanJobsDone - scanJobsRunning);
     return {
       kind: 'waiting-for-mac',
-      headline: 'Waiting on your Mac',
-      detail: scanJobsTotal
-        ? `${scanJobsDone} of ${scanJobsTotal} searches done. Meta only shows its ad library `
-          + 'to a real browser, so Chrome on your Mac is doing the reading. Costs nothing.'
-        : 'Chrome on your Mac is reading a page that refuses a plain request.',
-      // Deliberately the time since the last CHECK, not since the last change.
-      // A search takes minutes, so "nothing has changed for 4 minutes" would
-      // read as broken while it is working perfectly.
-      clock: sinceTickMs === null ? '' : `Checked ${humanDuration(sinceTickMs)} ago.`,
+      headline: reading || !scanJobsTotal ? 'Reading on your Mac' : 'Waiting on your Mac',
+      detail: !scanJobsTotal
+        ? 'Chrome on your Mac is reading a page that refuses a plain request.'
+        : reading
+          ? `${scanJobsDone} of ${scanJobsTotal} searches done, and Chrome on your Mac is `
+            + `reading ${scanJobsRunning === 1 ? 'another one' : `${scanJobsRunning} more`} `
+            + `right now${unclaimed ? `, with ${unclaimed} still to start` : ''}. A search `
+            + 'takes a few minutes. Costs nothing.'
+          : `${scanJobsDone} of ${scanJobsTotal} searches done. Nothing on your Mac has picked `
+            + `up the ${unclaimed === 1 ? 'last one' : `remaining ${unclaimed}`} yet — Meta only `
+            + 'shows its ad library to a real browser, so this needs the worker running.',
+      // While a search is genuinely in flight, the honest number is how long
+      // THAT has been going. Otherwise it is how recently we looked — never
+      // time-since-change, which on a four-minute search reads as broken while
+      // it is working perfectly.
+      clock: reading && readingMs !== null
+        ? `Reading for ${humanDuration(readingMs)}.`
+        : sinceTickMs === null ? '' : `Checked ${humanDuration(sinceTickMs)} ago.`,
     };
   }
 

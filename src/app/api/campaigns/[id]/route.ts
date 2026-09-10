@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic';
 type ScanJobRow = {
   kind: string;
   status: string;
+  claimed_at: string | null;
   items_found: number | null;
   items_qualified: number | null;
   search_terms: string[] | null;
@@ -48,8 +49,11 @@ export async function GET(
           + 'testimonials, offer_headline, offer_body, cta_button_text, cta_url')
         .eq('campaign_id', id).maybeSingle(),
       db.from('scanner_jobs')
+        // claimed_at is the difference between "your Mac is reading this right
+        // now" and "nothing has picked this up". Both look like an unfinished
+        // job from the outside, and they need opposite advice.
         .select('kind, status, attempts, notes, error_message, created_at, completed_at, '
-          + 'region, media_type, search_terms, items_found, items_qualified')
+          + 'claimed_at, region, media_type, search_terms, items_found, items_qualified')
         .eq('campaign_id', id).order('created_at', { ascending: false }),
       db.from('campaign_images')
         .select('position, source_url, caption, kind, usable')
@@ -183,9 +187,21 @@ export async function GET(
         // to a row type. Asserted here rather than pretended to be checked.
         const scanJobs = ((jobs ?? []) as unknown as ScanJobRow[])
           .filter((j) => j.kind === 'ad_scan');
+        const running = scanJobs.filter((j) => j.status === 'running');
+        // The oldest one, not the newest: with two searches in flight the
+        // honest answer to "how long has this been going" is the longer of
+        // them, and rounding it down would be the flattering lie.
+        const readingSince = running
+          .map((j) => Date.parse(j.claimed_at ?? '')).filter((t) => !Number.isNaN(t))
+          .reduce<number | null>((a, t) => (a === null || t < a ? t : a), null);
         return {
           jobsTotal: scanJobs.length,
+          // Only finished searches. A running one deliberately does NOT count
+          // here — it has produced nothing yet — which is exactly why the two
+          // fields below have to exist alongside it.
           jobsDone: scanJobs.filter((j) => j.status === 'completed').length,
+          jobsRunning: running.length,
+          readingSince: readingSince === null ? null : new Date(readingSince).toISOString(),
           jobsFailed: scanJobs.filter((j) => j.status === 'failed').length,
           adsFound: scanJobs.reduce((n, j) => n + (j.items_found ?? 0), 0),
           adsQualified: scanJobs.reduce((n, j) => n + (j.items_qualified ?? 0), 0),
