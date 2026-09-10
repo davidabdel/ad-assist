@@ -8,6 +8,7 @@ import {
   Button, Callout, Card, CopyButton, Field, Shell, inputClass,
 } from '@/components/ui';
 import { buildSteps, DEFAULT_PERSONA_TARGET, type Step, type StepState } from '@/lib/campaign-steps';
+import { describeLive, type LiveStatus } from '@/lib/campaign-live';
 import { CTA_LABELS } from '@/lib/ad-fields';
 
 /**
@@ -138,6 +139,8 @@ type BasePageView = {
 type CampaignView = {
   campaign: {
     id: string; title: string; slug: string; status: string;
+    /** When the row last changed. The only reliable "still since" across a reload. */
+    updated_at: string;
     source_url: string | null; error_message: string | null; has_brief: boolean;
     base_page_guidance: string | null;
     /** The note left on each step, keyed by step key. */
@@ -260,6 +263,26 @@ const BETWEEN_UNITS_MS = 700;
  */
 const ASSET_POLL_MS = 10_000;
 
+/**
+ * What "something actually happened" reduces to.
+ *
+ * Not the view object: that is rebuilt by every poll, so comparing it would
+ * count a poll that changed nothing as progress — the exact lie the clock
+ * beside the status exists to stop telling.
+ */
+function progressSignature(v: CampaignView): string {
+  return [
+    v.campaign.status,
+    v.personas.length,
+    v.jobs.filter((j) => j.status === 'completed').length,
+    v.scan.adsFound,
+    v.formats.length,
+    v.ideas.length,
+    v.images.length,
+    Boolean(v.base_page),
+  ].join('|');
+}
+
 export function CampaignProgress({ id }: { id: string }) {
   const { api } = useSession();
   const [view, setView] = useState<CampaignView | null>(null);
@@ -268,24 +291,66 @@ export function CampaignProgress({ id }: { id: string }) {
   const [running, setRunning] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
+  /**
+   * The three clocks behind the status strip.
+   *
+   * `tickAt` is when a unit of work last came back, `inFlightAt` is when the
+   * outstanding one started, and `changeAt` is when anything on this screen
+   * last genuinely changed. They are separate because they answer different
+   * questions: a five-minute persona batch is a long STEP but a healthy loop,
+   * and a screen that only knew "nothing changed for five minutes" would call
+   * that broken.
+   */
+  const [tickAt, setTickAt] = useState<number | null>(null);
+  const [inFlightAt, setInFlightAt] = useState<number | null>(null);
+  const [changeAt, setChangeAt] = useState<number | null>(null);
+  // Re-rendered once a second so the clocks count rather than sit. A number
+  // that does not move is exactly as useless as no number at all.
+  const [now, setNow] = useState(() => Date.now());
+
   // Survives re-renders so the loop can be told to stop when the screen goes away.
   const alive = useRef(true);
   const started = useRef(false);
+  // Read by the visibility handler, which must not re-subscribe every time the
+  // loop starts or stops.
+  const runningRef = useRef(false);
+
+  // Last progress signature seen. A ref rather than state because comparing it
+  // is what DECIDES a state change, and doing that in an effect would mean a
+  // render per poll whether or not anything moved.
+  const sigRef = useRef<string>('');
+  // The first poll always "changes" something — it is the first thing seen.
+  // Stamping it would date every stall from the moment the page opened, which
+  // is how an eight-minute freeze reads as one second old.
+  const firstPoll = useRef(true);
 
   const refresh = useCallback(async () => {
     const next = await api<CampaignView>(`/api/campaigns/${id}`);
-    if (alive.current) setView(next);
+    if (alive.current) {
+      const sig = progressSignature(next);
+      if (sig !== sigRef.current) {
+        sigRef.current = sig;
+        if (!firstPoll.current) setChangeAt(Date.now());
+      }
+      firstPoll.current = false;
+      setView(next);
+    }
     return next;
   }, [api, id]);
 
   const drive = useCallback(async () => {
+    if (runningRef.current) return;   // one engine per screen
+    runningRef.current = true;
     setRunning(true);
     setError(null);
     try {
       for (;;) {
         if (!alive.current) return;
+        setInFlightAt(Date.now());
         const result = await api<AdvanceResult>(`/api/campaigns/${id}/advance`, { method: 'POST' });
         if (!alive.current) return;
+        setInFlightAt(null);
+        setTickAt(Date.now());
 
         setLog((l) => [...l, result.did, ...(result.notes ?? [])].slice(-40));
         await refresh();
@@ -296,7 +361,11 @@ export function CampaignProgress({ id }: { id: string }) {
     } catch (e) {
       if (alive.current) setError((e as Error).message);
     } finally {
-      if (alive.current) setRunning(false);
+      runningRef.current = false;
+      if (alive.current) {
+        setInFlightAt(null);
+        setRunning(false);
+      }
     }
   }, [api, id, refresh]);
 
@@ -322,6 +391,34 @@ export function CampaignProgress({ id }: { id: string }) {
 
     return () => { alive.current = false; };
   }, [refresh, drive]);
+
+  /**
+   * A phone locks, the tab freezes, and the loop stops mid-sleep without ever
+   * throwing — so `running` stays true while nothing runs. Coming back to the
+   * screen is the moment to restart it, and it is also the moment somebody is
+   * looking. Cheap and idempotent: `drive()` refuses a second engine, and
+   * `advance()` is safe to call again at any point.
+   */
+  useEffect(() => {
+    function resume() {
+      if (document.visibilityState !== 'visible') return;
+      if (runningRef.current || !alive.current) return;
+      const status = view?.campaign.status;
+      if (status === 'ideas_ready' || status === 'failed' || status === 'base_review') return;
+      void drive();
+    }
+    document.addEventListener('visibilitychange', resume);
+    return () => document.removeEventListener('visibilitychange', resume);
+  }, [drive, view?.campaign.status]);
+
+  // Stops itself once nothing can change, so a settled campaign is not a page
+  // re-rendering once a second all afternoon.
+  const settled = view?.campaign.status === 'ideas_ready' && !running;
+  useEffect(() => {
+    if (settled) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [settled]);
 
   async function retry() {
     setRetrying(true);
@@ -492,6 +589,31 @@ export function CampaignProgress({ id }: { id: string }) {
     ideasGenerated: ideas.filter((i) => i.status === 'generated').length,
   });
 
+  const movedAt = Math.max(changeAt ?? 0, Date.parse(campaign.updated_at) || 0);
+
+  // The single answer to "is this frozen". Built from the campaign AND from
+  // what this browser is doing, because either one alone can be wrong about it.
+  const live = describeLive({
+    running,
+    inFlightMs: inFlightAt === null ? null : now - inFlightAt,
+    sinceTickMs: tickAt === null ? null : now - tickAt,
+    // What this screen has watched change, or — before it has watched anything
+    // — when the row itself last moved. Whichever is later is the truth. Zero
+    // means neither is known, and no clock is better than a clock reading 1970.
+    sinceChangeMs: movedAt ? now - movedAt : null,
+    stepTitle: steps.find((s) => s.state === 'active')?.title
+      // `pages_built` lights no step: the pages are done and the scan has not
+      // been queued yet. It is a real second of a real run, not a gap.
+      ?? (campaign.status === 'pages_built' ? 'Handing the ad-library scan to your Mac' : null),
+    failed,
+    errorMessage: campaign.error_message,
+    finished,
+    awaitingApproval,
+    waitingOnMac,
+    scanJobsDone: scan.jobsDone,
+    scanJobsTotal: scan.jobsTotal,
+  });
+
   return (
     <Shell header={<TopBar />}>
       <div className="mb-8">
@@ -502,19 +624,18 @@ export function CampaignProgress({ id }: { id: string }) {
           ← All campaigns
         </Link>
         <h1 className="mt-4 text-5xl font-bold">{campaign.title}</h1>
-        <p className="mt-3 text-lg leading-relaxed text-zinc-500">
-          {finished ? `${livePersonas.length} pages are live, and the ad library has been read.`
-            : failed ? 'Stopped. Nothing is lost — see below.'
-              : pagesLive ? `${livePersonas.length} pages are live. Now reading Meta's ad library `
-                + 'to see how ads that survive get built — this part costs nothing.'
-              : awaitingApproval ? 'Waiting on you. Read the main page below and approve it.'
-                : running
-                  // Said plainly because it is the difference between "come back
-                  // in an hour" and "come back in an hour to find nothing moved".
-                  ? 'Working. Keep this tab open — the work runs from this page, so closing it '
-                    + 'pauses it. Nothing is lost, and reopening carries on from where it stopped.'
-                  : 'Paused. Reopen or reload this page to carry on.'}
-        </p>
+        {/* One strip, five possible states, and it is never allowed to describe
+            the campaign without also describing whether anything is driving it.
+            The sentence it replaced chose its branch from the status alone,
+            which is how a campaign motionless for eight minutes rendered "Now
+            reading Meta's ad library". */}
+        <LiveStrip status={live} onCarryOn={failed ? null : drive} />
+        {pagesLive && !failed && livePersonas.length ? (
+          <p className="mt-3 text-lg leading-relaxed text-zinc-500">
+            {livePersonas.length} pages are live. That part is finished and nothing below can
+            undo it.
+          </p>
+        ) : null}
       </div>
 
       {waitingOnMac ? (
@@ -523,21 +644,20 @@ export function CampaignProgress({ id }: { id: string }) {
             tone="warn"
             title={waitingOnScan ? 'The ad scan needs your Mac' : 'This shop needs your Mac'}
           >
-            <p>
-              {waitingOnScan
-                // Not an error, unlike the ingest case. Meta serves the ad
-                // library to a real browser and to nothing else, so this is how
-                // this stage always works — said plainly so it does not read as
-                // something having gone wrong.
-                ? `${scan.jobsDone} of ${scan.jobsTotal} searches done. Meta only shows the ad `
-                  + 'library to a real browser, so Chrome on your Mac is doing the reading.'
-                /* The job carries the reason the server could not read it. Showing it
-                   is the difference between "something went wrong" and "this shop
-                   blocks robots, which is normal and expected". */
-                : ingest?.notes?.replace(/^server read failed, handed to the Mac: /, '')
+            {/* The scan's own status line is deliberately NOT repeated here —
+                the strip at the top of the screen carries it, and reading the
+                same sentence twice in two boxes is how a screen stops being
+                read at all. What this callout is FOR is the instructions. */}
+            {waitingOnScan ? null : (
+              /* The job carries the reason the server could not read it. Showing it
+                 is the difference between "something went wrong" and "this shop
+                 blocks robots, which is normal and expected". */
+              <p>
+                {ingest?.notes?.replace(/^server read failed, handed to the Mac: /, '')
                   ?? 'The page could not be read from the server.'}
-            </p>
-            <p className="mt-2">
+              </p>
+            )}
+            <p className={waitingOnScan ? undefined : 'mt-2'}>
               {waitingOnScan
                 ? 'Leave the Mac awake and the worker running. If it is not running, open '
                   + 'Terminal, paste this, and leave the window open:'
@@ -1140,6 +1260,65 @@ function RedoBox({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * "Is this frozen?", answered before anything else on the screen.
+ *
+ * Three parts, in the order somebody scanning a phone reads them: a word for
+ * the state, a sentence for what is being done or waited on, and a clock that
+ * counts. The clock is the part that does the real work — a screen with no
+ * moving number cannot be told apart from a screen that has died, however
+ * confident its wording is.
+ *
+ * The dot only pulses when something is genuinely in motion. A stopped run gets
+ * a still marker, because an animation on a dead screen is the same lie in a
+ * different medium.
+ */
+function LiveStrip({
+  status, onCarryOn,
+}: {
+  status: LiveStatus;
+  /** Null when a more specific control already exists — a failed run has its own. */
+  onCarryOn: (() => Promise<void>) | null;
+}) {
+  const { kind, headline, detail, clock } = status;
+  const moving = kind === 'working' || kind === 'waiting-for-mac';
+  const tone = kind === 'stopped' ? 'border-l-red-600 bg-red-50'
+    : kind === 'finished' ? 'border-l-emerald-600 bg-emerald-50'
+      : kind === 'waiting-for-you' ? 'border-l-amber-500 bg-amber-50'
+        : 'border-l-accent bg-zinc-50';
+  const dot = kind === 'stopped' ? 'bg-red-600'
+    : kind === 'finished' ? 'bg-emerald-600'
+      : kind === 'waiting-for-you' ? 'bg-amber-500'
+        : 'bg-accent';
+
+  return (
+    <div className={`mt-4 border-2 border-l-8 border-zinc-900 px-4 py-3 ${tone}`}>
+      <div className="flex items-center gap-3">
+        <span
+          className={`size-3 shrink-0 ${dot} ${moving ? 'animate-pulse' : ''}`}
+          aria-hidden
+        />
+        <p className="font-display text-lg font-bold tracking-[-0.02em] text-zinc-900">
+          {headline}
+        </p>
+        {clock ? (
+          // Aria-live so the one fact that matters is spoken as it changes,
+          // rather than only being visible.
+          <p className="ml-auto text-sm font-semibold text-zinc-500" aria-live="polite">
+            {clock}
+          </p>
+        ) : null}
+      </div>
+      <p className="mt-1.5 text-base leading-relaxed text-zinc-600">{detail}</p>
+      {kind === 'stopped' && onCarryOn ? (
+        <div className="mt-3">
+          <Button onClick={() => { void onCarryOn(); }}>Carry on</Button>
+        </div>
+      ) : null}
     </div>
   );
 }

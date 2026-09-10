@@ -108,6 +108,12 @@ export async function GET(
         title: campaign.title,
         slug: campaign.slug,
         status: campaign.status,
+        // When the row itself last changed, kept by a trigger. This is the only
+        // honest answer to "how long has this been sitting still" after a
+        // reload — the browser's own record of what it has watched change
+        // starts at nought every time the page opens, which would have
+        // described an eight-minute stall as a one-second one.
+        updated_at: campaign.updated_at,
         region: campaign.region,
         source_url: campaign.source_url,
         product_type: campaign.product_type,
