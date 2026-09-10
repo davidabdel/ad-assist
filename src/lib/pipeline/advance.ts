@@ -575,9 +575,10 @@ async function unit(
       // count below safe to read. Two drivers on one campaign — a tab and the
       // server tick, or a phone and a laptop — would otherwise both read
       // "15 personas exist", both write index 16, and the loser would die on
-      // the unique constraint after paying for a full batch.
-      // Read under the claim, not before it: a count taken outside the lock is
-      // the stale read this whole mechanism exists to prevent.
+      // the unique constraint after paying for a full batch. The count is read
+      // HERE, inside the claim — a count taken outside it is the stale read the
+      // whole mechanism exists to prevent.
+      //
       // Live pages only. A superseded page is one a redo replaced but could
       // not delete because a finished ad points at its URL — it is history,
       // not part of this campaign's twenty, and counting it here would make
