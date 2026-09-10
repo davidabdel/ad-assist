@@ -200,6 +200,12 @@ type GeneratedAsset = {
   /** Set when it was looked at and sent back. The file is kept regardless. */
   rejected_at: string | null;
   rejected_note: string | null;
+  /**
+   * 'ad' is the file the operator is buying. 'first_frame' is the picture a
+   * video with no photograph opens on — a step on the way, never the result.
+   * Null on everything made before there was anything but ads.
+   */
+  role: 'ad' | 'first_frame' | null;
 };
 
 type AdIdea = {
@@ -221,6 +227,10 @@ type AdIdea = {
   est_usd: number | string;
   destination_url: string;
   source_image_url: string | null;
+  /** True when the picture on the row was made rather than photographed. */
+  source_image_generated: boolean | null;
+  /** The picture to make, on the ideas none of the seller's photographs fitted. */
+  generated_image_prompt: string | null;
   status: 'draft' | 'approved' | 'generating' | 'generated' | 'failed' | 'rejected';
   rejected_reason: string | null;
   edited_at: string | null;
@@ -2083,12 +2093,16 @@ function IdeaRow({
   // Every file this idea has produced, oldest first. A rejected one is kept
   // rather than replaced: it was paid for, and it is what the next attempt is
   // being judged against.
-  const finished = idea.generated_assets
+  //
+  // Ads only. A video with no photograph also produces the still it opens on,
+  // and that still is already on the row as its picture — showing it here as
+  // the result would put a JPEG inside a <video> tag and call it the ad.
+  const ads = idea.generated_assets.filter((a) => (a.role ?? 'ad') === 'ad');
+  const finished = ads
     .filter((a) => a.state === 'success')
     .sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1));
   const rejectedAttempts = finished.filter((a) => a.rejected_at);
-  const asset = finished.find((a) => !a.rejected_at)
-    ?? idea.generated_assets[idea.generated_assets.length - 1];
+  const asset = finished.find((a) => !a.rejected_at) ?? ads[ads.length - 1];
   const fileUrl = asset && !asset.rejected_at
     ? asset.stored_url ?? asset.result_url ?? null
     : null;
@@ -2238,20 +2252,40 @@ function IdeaRow({
 
           <div className="mt-4 flex items-start gap-4">
             {idea.source_image_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={idea.source_image_url}
-                alt=""
-                loading="lazy"
-                className="size-20 shrink-0 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
-              />
+              <div className="shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={idea.source_image_url}
+                  alt=""
+                  loading="lazy"
+                  className="size-20 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
+                />
+                {/* Said outright rather than left to look like one of theirs.
+                    Once a made picture is written onto the row it is
+                    indistinguishable from a photograph, and the whole reason it
+                    is allowed to exist is that it does not pretend to be the
+                    product. */}
+                {idea.source_image_generated ? (
+                  <p className="mt-1 w-20 text-center text-[10px] font-bold uppercase leading-tight tracking-wide text-zinc-400">
+                    Made
+                  </p>
+                ) : null}
+              </div>
             ) : null}
             <div className="min-w-0 text-sm leading-6 text-zinc-600">
               <p>{idea.visual_concept}</p>
-              {!idea.source_image_url ? (
+              {!idea.source_image_url && idea.generated_image_prompt ? (
+                <p className="mt-1 text-xs font-semibold text-zinc-500">
+                  None of your photographs fitted this one, so the picture will be made from
+                  the description below. It shows the buyer&rsquo;s situation, never your
+                  product — nobody has photographed it, so anything drawn of it would be
+                  invented.
+                </p>
+              ) : null}
+              {!idea.source_image_url && !idea.generated_image_prompt ? (
                 <p className="mt-1 text-xs font-semibold text-amber-700">
-                  No photograph was chosen for this one, so it cannot be made until you point it
-                  at one. The words are still usable.
+                  No photograph was chosen for this one and no picture has been described yet,
+                  so it cannot be made. The words are still usable.
                 </p>
               ) : null}
             </div>
@@ -2270,6 +2304,19 @@ function IdeaRow({
             <p className="mt-2 whitespace-pre-wrap rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
               {idea.kie_prompt}
             </p>
+            {/* A video with no photograph opens on a picture that has to be made
+                first, and the instruction above is only the camera move. Without
+                this the operator approves two things having read one. */}
+            {idea.media_type === 'video' && idea.generated_image_prompt && !idea.source_image_url ? (
+              <>
+                <p className="mt-3 text-xs font-bold uppercase tracking-wide text-zinc-400">
+                  The picture it opens on, which is made first
+                </p>
+                <p className="mt-1 whitespace-pre-wrap rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
+                  {idea.generated_image_prompt}
+                </p>
+              </>
+            ) : null}
             {idea.video_storyboard?.beats?.length ? (
               <>
                 {/* The beats were written for the FIRST instruction and are never

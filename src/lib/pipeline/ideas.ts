@@ -1,6 +1,8 @@
 import { generate } from '@/lib/llm';
 import { COPY_RULES, type ProductType } from '@/lib/product-type';
-import { imageCost, VIDEO_SECONDS, videoCost } from '@/lib/kie';
+import {
+  IMAGE_MODEL, TEXT_IMAGE_MODEL, VIDEO_MODEL, imageCost, VIDEO_SECONDS, videoCost,
+} from '@/lib/kie';
 import { AdIdeaBatchSchema, type AdIdeaDraft, type ProductBrief } from './schemas';
 import { guidanceBlock } from './guidance';
 
@@ -50,11 +52,30 @@ photographs and told what to change. So:
   into the picture. Editing models spell them wrong, and Meta renders the real
   headline and price around the ad anyway.
 
+WHEN THERE IS NO PHOTOGRAPH FOR IT
+Sometimes the library holds nothing that honestly shows what this ad is about,
+and sometimes it is empty — a company that sells software has no product
+photography at all. Then set source_image_index to -1 and write
+generated_image_prompt: a photograph to be MADE.
+
+One rule governs it and it is not negotiable: THE GENERATED PICTURE NEVER SHOWS
+THE PRODUCT. Not the object, not its box, not its logo, not a laptop screen
+showing its interface. Nobody has photographed it for you, so every detail you
+describe of it is invented — and an invented product inside a real ad is found
+out at delivery. Photograph the buyer's world instead: the moment before, the
+mess, the hands, the desk at 11pm, the relief afterwards. That is a true picture
+of the thing the ad is actually about.
+
+A real photograph always beats a made one. Use -1 because nothing fits, never
+because choosing is work.
+
 THE VIDEO
-One continuous ten-second shot that begins on the chosen photograph and moves.
-There is no cutting available, so do not write cuts — write a single move.
-It plays MUTED in the feed, so there is no dialogue, no voiceover and no music.
-Everything that has to be understood must be understood by looking.`;
+One continuous ten-second shot that begins on the opening frame and moves. The
+opening frame is the photograph you chose, or the picture you described when
+there was none. There is no cutting available, so do not write cuts — write a
+single move. It plays MUTED in the feed, so there is no dialogue, no voiceover
+and no music. Everything that has to be understood must be understood by
+looking.`;
 
 export type FormatForPrompt = {
   id: string;
@@ -143,7 +164,10 @@ function renderFormats(formats: FormatForPrompt[]): string {
 }
 
 function renderImages(images: ImageForPrompt[]): string {
-  if (!images.length) return '(empty — there are no usable photographs, so use -1)';
+  if (!images.length) {
+    return '(EMPTY — this seller has no photographs at all. Every idea must use -1 '
+      + 'and describe a picture to be made.)';
+  }
   return images.map((i) => `${i.position}: ${i.caption ?? 'no description'}`).join('\n');
 }
 
@@ -167,6 +191,12 @@ export type IdeaRow = {
   est_usd: number;
   destination_url: string;
   source_image_url: string | null;
+  /**
+   * The picture to make when `source_image_url` is null. Null when a real
+   * photograph was chosen — it is not a fallback held in reserve, it is the
+   * instruction that runs.
+   */
+  generated_image_prompt: string | null;
 };
 
 export type IdeaBatchResult = {
@@ -265,16 +295,38 @@ export async function generateIdeasForPersona(input: {
       : usableFormats.find((f) => f.media_type === mediaType) ?? null;
 
     const prompt = (mediaType === 'image' ? draft.image_prompt : draft.video_prompt).trim();
-    if (!prompt) {
+    const sourceUrl = byIndex.get(draft.source_image_index) ?? null;
+    const scene = (draft.generated_image_prompt ?? '').trim() || null;
+
+    // A static built on a photograph needs the edit instruction; a static with
+    // no photograph needs the scene, and that IS its instruction. Either way the
+    // row has to arrive with something to run, or it is the dead end this whole
+    // change exists to remove.
+    if (mediaType === 'image' && !prompt && !scene) {
+      rejected.push({ idea_index: planned.index, reason: 'no image prompt was written' });
+      return;
+    }
+    if (mediaType === 'video' && !prompt) {
+      rejected.push({ idea_index: planned.index, reason: 'no video prompt was written' });
+      return;
+    }
+    if (!sourceUrl && !scene) {
       rejected.push({
         idea_index: planned.index,
-        reason: `no ${mediaType === 'image' ? 'image' : 'video'} prompt was written`,
+        reason: 'no photograph was chosen and no picture was described, so nothing could '
+          + 'be made from it',
       });
       return;
     }
 
-    const sourceUrl = byIndex.get(draft.source_image_index) ?? null;
-    const cost = mediaType === 'image' ? imageCost() : videoCost(VIDEO_SECONDS);
+    // A video with no photograph has to buy its opening frame before it can buy
+    // the video. That is one extra image generation, and the estimate is what
+    // the campaign ceiling is enforced against, so it has to be in the number
+    // the operator sees rather than a surprise at submit.
+    const base = mediaType === 'image' ? imageCost() : videoCost(VIDEO_SECONDS);
+    const cost = mediaType === 'video' && !sourceUrl
+      ? { credits: base.credits + imageCost().credits, usd: base.usd + imageCost().usd }
+      : base;
 
     rows.push({
       campaign_id: input.campaignId,
@@ -289,8 +341,20 @@ export async function generateIdeasForPersona(input: {
       cta_label: draft.cta_label,
       visual_concept: draft.visual_concept,
       them_vs_us: { why_this_works: draft.why_this_works },
-      kie_model: mediaType === 'image' ? 'google/nano-banana-edit' : 'bytedance/seedance-2-fast',
-      kie_prompt: prompt,
+      // The model is decided again at submit, from whether a photograph is on
+      // the row by then — a picture can be attached or removed by hand after
+      // this. What is written here is what would run today.
+      kie_model: mediaType === 'video' ? VIDEO_MODEL : (sourceUrl ? IMAGE_MODEL : TEXT_IMAGE_MODEL),
+      // For a static with no photograph the scene IS the instruction, so it goes
+      // in the field the card already shows and the redo already rewrites,
+      // rather than into a second prompt field that only some rows use and that
+      // a redo would leave describing the rejected version.
+      //
+      // The scene wins over image_prompt here even though the prompt asks for
+      // only one of them: an edit instruction run against a model with nothing
+      // to edit — "keep the bottle exactly as photographed" — draws an invented
+      // bottle, which is the one thing this must never do.
+      kie_prompt: mediaType === 'image' && !sourceUrl ? scene : prompt,
       // Written for both, but only ever non-null on a video — the table's own
       // check constraint requires it there, and a static with a storyboard would
       // be a field nobody reads.
@@ -300,10 +364,21 @@ export async function generateIdeasForPersona(input: {
       est_credits: cost.credits,
       est_usd: cost.usd,
       destination_url: input.destinationUrl,
-      // Null is allowed and is visible on screen as "no photo chosen". It blocks
-      // generation rather than the row: the copy is still worth having, and a
-      // photo can be picked by hand.
+      // Null is allowed and no longer blocks anything: the picture is made
+      // instead. A photo can still be picked by hand, and doing so is the better
+      // ad — a real photograph of the real product beats a described one.
       source_image_url: sourceUrl,
+      // Set on EVERY photograph-less idea, and it does two jobs.
+      //
+      // For a video it is live: the frame the shot opens on is made from it at
+      // submit, while `kie_prompt` holds the camera move.
+      //
+      // For a static it is a record rather than an instruction — the scene is
+      // already in `kie_prompt`, which is what runs and what a redo rewrites, so
+      // this holds the picture as first described and will diverge from it after
+      // a redo. It is also the marker that says this row's picture was written to
+      // be MADE, which is what tells a later pass that a row does not need one.
+      generated_image_prompt: sourceUrl ? null : scene,
     });
   });
 

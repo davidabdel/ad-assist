@@ -293,6 +293,15 @@ export type FormatSpecBatch = z.infer<typeof FormatSpecBatchSchema>;
  * retoucher, not a description to a painter — "keep the product exactly as
  * photographed, place it on …" — and anything that would repaint the product
  * itself is a picture of a thing that does not exist.
+ *
+ * `generated_image_prompt` is the answer to the case where there is no
+ * photograph to hand the retoucher, which is not rare: a campaign built from a
+ * software company's website has no product photography at all. It is written
+ * to a photographer instead, and it is bound by one rule that keeps it honest —
+ * IT NEVER DEPICTS THE PRODUCT. A generated picture of somebody's product is a
+ * picture of a thing that does not exist, sitting in an ad for a thing that
+ * does. So it shows the buyer's situation instead: the moment, the problem, the
+ * outcome. The words carry the product; the picture carries the feeling.
  */
 const AdIdeaSchema = z.object({
   format_index: z.number().describe(
@@ -327,9 +336,12 @@ const AdIdeaSchema = z.object({
   source_image_index: z.number().describe(
     'Index of the photograph from the IMAGE LIBRARY this ad is built out of — '
     + 'the picture the editor starts from, or the first frame of the video. '
-    + 'Choose the one that already shows what the ad is about. -1 only when the '
-    + 'library genuinely contains nothing usable, and an idea with -1 cannot be '
-    + 'generated, so use it as a last resort rather than a default.',
+    + 'Choose the one that already shows what the ad is about. -1 when the '
+    + 'library is empty or contains nothing that honestly illustrates this ad; '
+    + 'a real photograph of the real product always beats a generated scene, so '
+    + '-1 is the answer when there is no fitting photograph rather than a '
+    + 'shortcut past choosing one. If you use -1 you MUST fill '
+    + 'generated_image_prompt.',
   ),
   image_prompt: z.string().describe(
     'THE EDIT INSTRUCTION, written to a retoucher who is holding the chosen '
@@ -341,12 +353,32 @@ const AdIdeaSchema = z.object({
     + 'image models spell them wrong, and Meta puts the real copy around the ad '
     + 'anyway. Empty string ONLY for a video idea.',
   ),
+  generated_image_prompt: z.string().describe(
+    'ONLY when source_image_index is -1, and required then. A photograph to be '
+    + 'MADE, described to a photographer who has never seen this product: the '
+    + 'subject, the setting, the light, the lens, who is in it and what they '
+    + 'are doing. For a static this IS the ad\'s picture. For a video it is the '
+    + 'opening frame the shot moves from.\n'
+    + 'IT MUST NOT DEPICT THE PRODUCT. Not the object, not its packaging, not '
+    + 'its logo, not a screen showing its interface. Nobody has photographed it '
+    + 'for you, so anything you describe of it is invented, and an invented '
+    + 'product in a real ad is a lie the buyer finds out about at delivery. '
+    + 'Photograph the buyer\'s world instead — the moment before, the frustration, '
+    + 'the hands, the desk, the relief afterwards.\n'
+    + 'No words, numbers, prices, badges, logos, watermarks, signage or user '
+    + 'interfaces anywhere in the frame: image models spell them wrong, and Meta '
+    + 'renders the real copy around the ad. Empty string whenever a photograph '
+    + 'was chosen.',
+  ),
   video_prompt: z.string().describe(
     'For a video idea: one continuous ten-second shot that STARTS from the '
-    + 'chosen photograph and moves. Describe the camera move, what enters or '
-    + 'changes, and the ending frame. The product stays exactly as photographed '
-    + 'throughout. No dialogue, no on-screen text, no music cues — the ad plays '
-    + 'muted in the feed. Empty string for a static idea.',
+    + 'opening frame and moves. The opening frame is the photograph you chose, '
+    + 'or — when you chose -1 — the picture described in generated_image_prompt; '
+    + 'either way it already exists when this runs, so describe the move rather '
+    + 'than the frame. Describe the camera move, what enters or changes, and the '
+    + 'ending frame. The product stays exactly as it opens throughout. No '
+    + 'dialogue, no on-screen text, no music cues — the ad plays muted in the '
+    + 'feed. Empty string for a static idea.',
   ),
   storyboard_beats: z.array(z.object({
     at_second: z.number().describe('When this beat starts, in seconds from 0.'),
