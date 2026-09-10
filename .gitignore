@@ -47,3 +47,6 @@ scanner/node_modules/
 
 # throwaway harnesses and downloaded artefacts, never shipped
 /.scratch/
+
+# Screenshots written by scripts/shoot-status-strip.mjs. Evidence, not source.
+/.shots/

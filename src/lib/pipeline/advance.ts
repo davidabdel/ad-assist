@@ -582,7 +582,14 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
         if (existing.length >= target) {
           await db.from('campaigns').update({ status: 'pages_built' }).eq('id', campaign.id);
           return {
-            status: 'pages_built', done: true, waiting: false, terminal: true,
+            // NOT terminal. The pages being live is the milestone the operator
+            // came for, but it is not the end of the run — the ad scan comes
+            // next and `pages_built` is the state that queues it. This used to
+            // return terminal, which stopped the driving loop one call BEFORE
+            // the scan was ever handed to the Mac. The campaign then sat at
+            // `pages_built` indefinitely while the screen said it was reading
+            // the ad library, and only a page reload restarted it.
+            status: 'pages_built', done: true, waiting: false, terminal: false,
             personas: existing.length,
             did: `All ${existing.length} persona pages are live.`,
           };
@@ -693,7 +700,9 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
           status: total >= target ? 'pages_built' : 'personas',
           done: total >= target,
           waiting: false,
-          terminal: total >= target,
+          // Same reason as above: the last batch landing is not an ending, it
+          // is the handover to the scan.
+          terminal: false,
           personas: total,
           did: `Wrote ${added} persona${added === 1 ? '' : 's'} (${total}/${target}).`,
           notes: rejectedNotes,
