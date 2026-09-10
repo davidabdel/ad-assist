@@ -11,6 +11,8 @@ import {
 } from './images';
 import { generatePersonaBatch, type ExistingPersona } from './personas';
 import { extractFormats } from './formats';
+import { writeScene } from './scene';
+import { IMAGE_CREDITS, TEXT_IMAGE_MODEL, VIDEO_SECONDS, usd, videoCost } from '@/lib/kie';
 import {
   generateIdeasForPersona, planIdeas,
   type FormatForPrompt, type ImageForPrompt, type PersonaForPrompt,
@@ -127,6 +129,122 @@ async function fail(id: string, message: string): Promise<AdvanceResult> {
   await serviceClient().from('campaigns')
     .update({ status: 'failed', error_message: message }).eq('id', id);
   return { status: 'failed', did: message, done: false, waiting: false, terminal: true };
+}
+
+/**
+ * Give a picture to one ad that has none, and return null when there are none
+ * left to give.
+ *
+ * An idea with no photograph and no described picture cannot ever be made: the
+ * words are written, the card says so, and there is nothing behind the Approve
+ * button. That set is not small. A campaign built from a software company's
+ * website has NO photographs at all, so every one of its ideas lands here.
+ *
+ * Ideas written since the pictures went in already carry theirs, out of the
+ * same model call that wrote the words, for no extra tokens. This is for the
+ * rows that were written before that — and it is the reason a campaign that was
+ * already half-written does not have to be thrown away and started again.
+ *
+ * TOKENS ONLY. Nothing here submits to KIE. Approve is still the only button in
+ * this app that spends.
+ */
+async function fillOnePicture(
+  campaign: CampaignRow,
+  personas: (PersonaForPrompt & { slug: string })[],
+): Promise<AdvanceResult | null> {
+  const db = serviceClient();
+
+  // Rows with no photograph AND no picture described. A photograph-less row
+  // that has been given its picture is excluded by the second condition, which
+  // is also what stops this rewriting the instruction of a static that is being
+  // generated from one right now.
+  const { data: gapRows } = await db.from('ad_ideas')
+    .select('id, persona_id, media_type, angle, headline, visual_concept, kie_prompt')
+    .eq('campaign_id', campaign.id).is('superseded_at', null)
+    .is('source_image_url', null).is('generated_image_prompt', null)
+    .in('status', ['draft', 'rejected', 'failed'])
+    .order('created_at').limit(1);
+
+  const rows = (gapRows ?? []) as unknown as {
+    id: string; persona_id: string; media_type: 'image' | 'video';
+    angle: string; headline: string; visual_concept: string; kie_prompt: string | null;
+  }[];
+  const row = rows[0];
+  if (!row) return null;
+
+  const brief = campaign.scraped_data?.brief;
+  if (!brief) {
+    return fail(campaign.id, 'The product brief is missing, so the ads with no photograph '
+      + 'cannot be given one.');
+  }
+  const persona = personas.find((p) => p.id === row.persona_id);
+
+  let scene;
+  try {
+    scene = await writeScene({
+      role: row.media_type === 'video' ? 'first_frame' : 'static',
+      brandName: brief.brand_name,
+      productName: brief.product_name,
+      productSummary: brief.one_line_summary,
+      buyer: persona
+        ? `${persona.persona_name}. What hurts: ${persona.primary_pain_point}. `
+          + `What they want: ${persona.core_desire}.`
+        : 'Not recorded.',
+      angle: row.angle,
+      headline: row.headline,
+      visualConcept: row.visual_concept,
+      previousPrompt: row.kie_prompt,
+    });
+  } catch (e) {
+    return fail(campaign.id, 'Could not write the picture for an ad that has no photograph: '
+      + (e as Error).message);
+  }
+
+  // A video's instruction is the camera move, so the picture goes in its own
+  // field and the move is left alone. A static's instruction IS the picture.
+  const videoWithFrame = videoCost(VIDEO_SECONDS);
+  const patch = row.media_type === 'video'
+    ? {
+      generated_image_prompt: scene.scene_prompt,
+      // The frame has to be bought before the video can be, and the estimate is
+      // what the ceiling is enforced against. Set outright rather than added to:
+      // this can run more than once over a campaign's life and an estimate that
+      // grows by four credits each time is a ceiling that closes on its own.
+      est_credits: videoWithFrame.credits + IMAGE_CREDITS,
+      est_usd: videoWithFrame.usd + usd(IMAGE_CREDITS),
+    }
+    : {
+      generated_image_prompt: scene.scene_prompt,
+      // Replaced, not kept. What is in there was written to a retoucher holding
+      // a photograph that does not exist — "keep the product exactly as
+      // photographed" — and handing that to a model with nothing to edit is how
+      // you get a picture of an invented product.
+      kie_prompt: scene.scene_prompt,
+      kie_model: TEXT_IMAGE_MODEL,
+    };
+
+  const { error } = await db.from('ad_ideas').update({
+    ...patch,
+    ...(scene.visual_concept ? { visual_concept: scene.visual_concept } : {}),
+  }).eq('id', row.id);
+  if (error) {
+    return fail(campaign.id, `Could not save the picture for an ad: ${error.message}`);
+  }
+
+  const { count: left } = await db.from('ad_ideas')
+    .select('id', { count: 'exact', head: true })
+    .eq('campaign_id', campaign.id).is('superseded_at', null)
+    .is('source_image_url', null).is('generated_image_prompt', null)
+    .in('status', ['draft', 'rejected', 'failed']);
+
+  return {
+    status: 'writing_ideas',
+    done: false,
+    waiting: false,
+    terminal: false,
+    did: `Wrote the picture for "${row.headline.slice(0, 50)}" — none of your photographs `
+      + `fitted it, so it will be made. ${left ?? 0} more like it.`,
+  };
 }
 
 /**
@@ -966,6 +1084,22 @@ async function unit(
 
       const next = personas.find((p) => !done.has(p.id));
       if (!next) {
+        // Every buyer has ideas. Before the table is called ready, the rows
+        // that have no picture at all get one.
+        //
+        // A photograph-less idea written today comes out of the call above
+        // already carrying its scene, free, so this normally finds nothing. It
+        // exists for the rows written before that was true — twenty-seven of
+        // them on the first campaign built from a site with no photographs —
+        // and for the occasional row where the model chose -1 and then described
+        // nothing. Both are the same thing: words that are fine and a picture
+        // that does not exist.
+        //
+        // ONE ROW PER CALL, like every other unit in this file, and it costs
+        // tokens and nothing else.
+        const gap = await fillOnePicture(campaign, personas);
+        if (gap) return gap;
+
         await db.from('campaigns').update({ status: 'ideas_ready' }).eq('id', campaign.id);
         const { count: ideaCount } = await db.from('ad_ideas')
           .select('id', { count: 'exact', head: true })

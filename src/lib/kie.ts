@@ -18,13 +18,40 @@
  *    not ours — is what the ledger ends up holding.
  */
 
-const BASE = 'https://api.kie.ai';
+/**
+ * KIE, unless something is standing in for it.
+ *
+ * The override exists for one reason and it is a good one: this is the only
+ * module in the app that spends money, so the only way to prove the submit path
+ * is right — that a static with no photograph goes to the drawing model and not
+ * the editing one, that a video's opening frame is 9:16, that a refused task
+ * unwinds the reservation — is to point it at something that records what it
+ * was asked for. A check that has to buy an ad to run is a check nobody runs.
+ *
+ * It fails safe. Unset, this is KIE. Set to anything else, real submits go to a
+ * host that is not KIE and nothing is billed anywhere.
+ */
+const BASE = process.env.KIE_BASE_URL?.replace(/\/$/, '') || 'https://api.kie.ai';
 
 /** KIE bills in credits. This is the conversion its own dashboard uses. */
 export const USD_PER_CREDIT = 0.005;
 
 export const IMAGE_MODEL = 'google/nano-banana-edit';
 export const VIDEO_MODEL = 'bytedance/seedance-2-fast';
+
+/**
+ * The same family as IMAGE_MODEL, with nothing to edit.
+ *
+ * Used only when the seller's own photographs cannot supply a picture — a
+ * campaign built from a software company's website has no product photography
+ * at all, and an ad idea with no photograph behind it can never be made. The
+ * edit model needs an image to hold; this one is handed a description instead.
+ *
+ * It is deliberately the sibling rather than a better model: same house style,
+ * same price, so a campaign whose pictures are half photographed and half
+ * generated does not read as two campaigns.
+ */
+export const TEXT_IMAGE_MODEL = 'google/nano-banana';
 
 /**
  * Credit prices, and where they came from.
@@ -129,6 +156,32 @@ export async function submitImage(input: {
       image_urls: [input.imageUrl],
       output_format: 'png',
       aspect_ratio: IMAGE_ASPECT,
+    },
+  });
+  const taskId = (json.data as { taskId?: string } | undefined)?.taskId;
+  if (!taskId) throw new Error('KIE accepted the image task but returned no task id');
+  return { taskId };
+}
+
+/**
+ * Submit one image built from a description rather than from a photograph.
+ * Same warning as submitImage: this bills on return.
+ *
+ * The aspect ratio is the caller's because this serves two jobs. A static ad is
+ * 4:5, the shape it will be posted in. A first frame for a video is 9:16,
+ * because the video model takes it as the opening frame and a shape change
+ * between the two is a crop the operator never asked for.
+ */
+export async function submitImageFromText(input: {
+  prompt: string;
+  aspect?: string;
+}): Promise<SubmitResult> {
+  const json = await post('/api/v1/jobs/createTask', {
+    model: TEXT_IMAGE_MODEL,
+    input: {
+      prompt: input.prompt.slice(0, 5000),
+      output_format: 'png',
+      aspect_ratio: input.aspect ?? IMAGE_ASPECT,
     },
   });
   const taskId = (json.data as { taskId?: string } | undefined)?.taskId;

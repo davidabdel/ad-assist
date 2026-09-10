@@ -89,7 +89,7 @@ export async function GET(
         // simply vanished.
         .select('*, generated_assets(id, state, result_url, stored_url, credits_charged, '
           + 'fail_reason, kie_task_id, created_at, completed_at, attempt, prompt_used, '
-          + 'rejected_at, rejected_note)')
+          + 'rejected_at, rejected_note, role)')
         .eq('campaign_id', id).order('persona_id').order('idea_index'),
       // The ledger, whole. It is short — one row per generation — and showing
       // the lines rather than only a total is what makes a ceiling believable.
