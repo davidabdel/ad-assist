@@ -63,6 +63,77 @@ function db() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── driving the pipeline ──────────────────────────────────────────────
+/**
+ * The app's pipeline used to be driven by whatever browser tab was open on it.
+ * Lock a phone and that tab freezes mid-wait, with no error, and the run stops
+ * until somebody looks at the screen again.
+ *
+ * So this machine drives it instead. Not by doing the work — the work stays on
+ * the server, where the keys and the models are — but by saying "keep going"
+ * every few seconds, which is all the tab was ever doing. This is the right
+ * machine for it because it is already the one that never sleeps and is already
+ * compulsory for the ad-library scan: the run's dependency on it is not new.
+ *
+ * Vercel's own scheduler would be the obvious home for this and cannot be: the
+ * project is on the Hobby plan, where a cron job fires once a day. See the note
+ * in src/app/api/tick/route.ts.
+ */
+const TICK_URL = process.env.TICK_URL;
+const TICK_EVERY_MS = Number(process.env.TICK_EVERY_MS || 10_000);
+/**
+ * The service role key, which this worker already holds — so switching the
+ * driver on took no new secret at either end. The route accepts CRON_SECRET
+ * too, for the day Vercel's scheduler does the poking instead.
+ */
+const TICK_SECRET = process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+let ticking = null;
+let tickedAt = 0;
+let tickWarned = false;
+
+/**
+ * Ask the server to move every campaign along.
+ *
+ * Never awaited by the caller. A tick can legitimately run for minutes — it is
+ * writing landing pages — and blocking the job loop behind it would mean a
+ * queued scan sat untouched while the pipeline thought. The in-flight guard is
+ * what keeps this to one driver at a time; the server holds a per-campaign lock
+ * as well, so an overlap is safe rather than merely unlikely.
+ */
+function pokeTick() {
+  if (ticking || Date.now() - tickedAt < TICK_EVERY_MS) return;
+  if (!TICK_URL || !TICK_SECRET) {
+    if (!tickWarned) {
+      tickWarned = true;
+      console.warn('  TICK_URL is not set, so campaigns still only run while a browser tab is '
+        + 'open on them. Set it to https://<your-app>/api/tick in .env.local.');
+    }
+    return;
+  }
+
+  tickedAt = Date.now();
+  ticking = fetch(TICK_URL, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TICK_SECRET}` },
+  })
+    .then(async (res) => {
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        console.warn(`  tick failed: ${res.status} ${body?.error ?? ''}`);
+        return;
+      }
+      // Printed because this window is the only place the run is visible once
+      // the phone is in a pocket. Silence when nothing moved, so an idle
+      // machine does not scroll all night.
+      for (const c of body?.driven ?? []) {
+        console.log(`  ${c.title}: ${c.last}`);
+      }
+    })
+    .catch((e) => console.warn(`  tick failed: ${e.message}`))
+    .finally(() => { ticking = null; });
+}
+
 function beat(client, jobId) {
   const timer = setInterval(async () => {
     const { error } = await client.from('scanner_jobs')
@@ -203,7 +274,14 @@ async function runJob(client, job) {
 async function main() {
   const client = db();
   console.log(`ad-assist worker "${WORKER_ID}" — ${ONCE ? 'single job' : `polling, up to ${CONCURRENCY} at once`}`);
-  console.log('Chrome runs headful, so leave the Mac awake while jobs are queued.\n');
+  console.log('Chrome runs headful, so leave the Mac awake while jobs are queued.');
+  if (!ONCE) {
+    console.log(TICK_URL
+      ? `Driving campaigns at ${TICK_URL} every ${Math.round(TICK_EVERY_MS / 1000)}s — `
+        + 'they keep running with no browser open.'
+      : 'Not driving campaigns: TICK_URL is unset.');
+  }
+  console.log('');
 
   let idle = 0;
   // Jobs in flight right now. Each is its own Chrome tab and its own
@@ -218,6 +296,11 @@ async function main() {
       .rpc('reap_stale_jobs', { max_silence: '5 minutes' });
     if (reapError) console.warn(`  reap failed: ${reapError.message}`);
     else if (reaped) console.log(`  requeued ${reaped} stale job(s)`);
+
+    // Deliberately not awaited, and deliberately before the claim: this is the
+    // thing that queues the ad-library searches in the first place, so poking
+    // it first is what turns a fresh campaign into work for the loop below.
+    if (!ONCE) pokeTick();
 
     // Fill up to the cap. claim_job hands back one row at a time and takes it
     // atomically, so calling it in a loop is safe with other workers running —

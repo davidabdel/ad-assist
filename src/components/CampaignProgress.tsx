@@ -146,6 +146,12 @@ type CampaignView = {
     id: string; title: string; slug: string; status: string;
     /** When the row last changed. The only reliable "still since" across a reload. */
     updated_at: string;
+    /**
+     * When a driver claimed this campaign, or null when nothing holds it. Held
+     * for one unit of work and cleared after, so a value here means something
+     * is mid-step RIGHT NOW — this tab, another tab, or the server tick.
+     */
+    driver_lock_at: string | null;
     source_url: string | null; error_message: string | null; has_brief: boolean;
     base_page_guidance: string | null;
     /** The note left on each step, keyed by step key. */
@@ -416,6 +422,22 @@ export function CampaignProgress({ id }: { id: string }) {
     return () => document.removeEventListener('visibilitychange', resume);
   }, [drive, view?.campaign.status]);
 
+  /**
+   * Watch, as well as drive.
+   *
+   * This screen used to refresh only inside its own driving loop, which was
+   * sound while the loop was the only thing that could move a campaign. It is
+   * not any more — the server tick drives it too, so that a locked phone no
+   * longer stops the run — and a screen that only looks when it is working
+   * would show a frozen page while the pages were being written behind it.
+   */
+  useEffect(() => {
+    const status = view?.campaign.status;
+    if (running || status === 'ideas_ready' || status === 'failed') return undefined;
+    const t = setInterval(() => { void refresh().catch(() => {}); }, 5000);
+    return () => clearInterval(t);
+  }, [running, view?.campaign.status, refresh]);
+
   // Stops itself once nothing can change, so a settled campaign is not a page
   // re-rendering once a second all afternoon.
   const settled = view?.campaign.status === 'ideas_ready' && !running;
@@ -609,17 +631,43 @@ export function CampaignProgress({ id }: { id: string }) {
   });
 
   const movedAt = Math.max(changeAt ?? 0, Date.parse(campaign.updated_at) || 0);
+  const sinceChangeMs = movedAt ? now - movedAt : null;
+
+  /**
+   * Something other than this tab is driving it.
+   *
+   * Two signals, because neither is sufficient alone. The lock is the direct
+   * one — held for the length of a unit, so it means "mid-step at this
+   * instant" — but it is released and retaken BETWEEN units, and a poll landing
+   * in that gap would flash "Not running" over a perfectly healthy run. Recent
+   * movement covers the gap.
+   *
+   * The lock is only believed while it is young. A driver that dies holding it
+   * leaves it set until the five-minute expiry, and five minutes of a screen
+   * insisting that something is working is the exact lie this strip exists to
+   * stop telling. Two minutes is longer than the slowest unit and shorter than
+   * anyone's patience.
+   */
+  const LOCK_TRUSTED_MS = 120_000;
+  const MOVED_RECENTLY_MS = 20_000;
+  const lockMs = campaign.driver_lock_at ? now - Date.parse(campaign.driver_lock_at) : null;
+  const drivenElsewhere = (lockMs !== null && lockMs >= 0 && lockMs < LOCK_TRUSTED_MS)
+    || (sinceChangeMs !== null && sinceChangeMs < MOVED_RECENTLY_MS);
 
   // The single answer to "is this frozen". Built from the campaign AND from
   // what this browser is doing, because either one alone can be wrong about it.
   const live = describeLive({
     running,
+    drivenElsewhere,
+    // A Mac job that has actually been claimed. Reading carries on with no tab
+    // open at all, so it outranks every "nothing is driving this" sentence.
+    macReading: ingest?.status === 'running' || scan.jobsRunning > 0,
     inFlightMs: inFlightAt === null ? null : now - inFlightAt,
     sinceTickMs: tickAt === null ? null : now - tickAt,
     // What this screen has watched change, or — before it has watched anything
     // — when the row itself last moved. Whichever is later is the truth. Zero
     // means neither is known, and no clock is better than a clock reading 1970.
-    sinceChangeMs: movedAt ? now - movedAt : null,
+    sinceChangeMs,
     stepTitle: steps.find((s) => s.state === 'active')?.title
       // `pages_built` lights no step: the pages are done and the scan has not
       // been queued yet. It is a real second of a real run, not a gap.

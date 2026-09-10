@@ -118,6 +118,14 @@ export async function GET(
         // starts at nought every time the page opens, which would have
         // described an eight-minute stall as a one-second one.
         updated_at: campaign.updated_at,
+        // When a driver claimed this campaign, or null when none holds it. Set
+        // for the length of one unit of work and cleared after — so a value
+        // here means something is working on this campaign RIGHT NOW, whether
+        // or not it is this browser. That is the only honest way for a screen
+        // that is not driving to tell "the server has it" from "nothing has
+        // it", and without it the run continuing without a tab open would
+        // render as "Not running".
+        driver_lock_at: campaign.persona_lock_at ?? null,
         region: campaign.region,
         source_url: campaign.source_url,
         product_type: campaign.product_type,
