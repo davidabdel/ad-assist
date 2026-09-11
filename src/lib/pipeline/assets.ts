@@ -11,8 +11,10 @@ import {
  *
  * THIS IS THE ONLY FILE IN THE APP THAT SPENDS MONEY. Everything before it —
  * reading the page, twenty landing pages, the ad-library scan, the formats, the
- * ideas themselves — costs model tokens and nothing else. Clicking Approve is
- * the first irreversible act, so the order of operations here is the design:
+ * ideas themselves — costs model tokens and nothing else. Two acts in here are
+ * irreversible — approving an ad, and drawing the picture for a row that has no
+ * photograph — and both follow the same order of operations, which is the
+ * design:
  *
  *   1. CLAIM the row with a conditional update from draft → generating. Two
  *      clicks, two tabs or a double-tap on a phone all reach this, and only one
@@ -32,6 +34,17 @@ import {
 /** Where a generated file ends up. Public, like the pages that will carry it. */
 const ASSET_PREFIX = 'generated';
 
+/**
+ * Money, to the cent, and never below zero.
+ *
+ * `1.26 - 0.02` is `1.2400000000000002` in floating point, and that figure goes
+ * into a ledger a person reads and into a ceiling a charge is refused against.
+ * A cent is the smallest thing this app charges, so a cent is the resolution.
+ */
+function cents(usdAmount: number): number {
+  return Math.max(0, Math.round(usdAmount * 100) / 100);
+}
+
 export type IdeaRowForSubmit = {
   id: string;
   campaign_id: string;
@@ -50,6 +63,15 @@ export type IdeaRowForSubmit = {
    * so the frame it opens on needs a field of its own.
    */
   generated_image_prompt?: string | null;
+  /**
+   * True when the picture on this row was drawn rather than photographed.
+   *
+   * IT DECIDES WHICH MODEL RUNS, so it is not cosmetic. A row holding one of
+   * the seller's photographs goes to the editing model; a row holding a picture
+   * this app made has already been paid for, and handing it back to a retoucher
+   * would buy a second-generation copy of a finished ad.
+   */
+  source_image_generated?: boolean | null;
   /**
    * Which go this is. 1 unless a finished result was rejected and sent back —
    * it is written onto the asset so that two files hanging off one idea can be
@@ -123,7 +145,7 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
   }
 
   /**
-   * Which of the three shapes this approval is, decided from the row rather
+   * Which of the five shapes this approval is, decided from the row rather
    * than from what was written when the idea was drafted — a photograph can be
    * attached or replaced by hand at any point up to the click.
    *
@@ -133,9 +155,16 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
    *            does not exist, so this buys the frame first and the video when
    *            the frame lands. Two charges from one click, which is why the
    *            estimate on the row already includes both.
+   *   'keep'   a static whose picture was already made and looked at. THE AD
+   *            EXISTS. Approving it spends nothing, because the money went when
+   *            the picture was made; a second call here would buy a different
+   *            picture from the one the operator just said yes to.
+   *   'video'  a video whose opening frame was already made and looked at. Only
+   *            the shot is left to buy, so only the shot is charged.
    */
-  const shape: 'edit' | 'draw' | 'frame' = idea.source_image_url
-    ? 'edit'
+  const alreadyDrawn = Boolean(idea.source_image_url) && Boolean(idea.source_image_generated);
+  const shape: 'edit' | 'draw' | 'frame' | 'keep' | 'video' = idea.source_image_url
+    ? (alreadyDrawn ? (idea.media_type === 'image' ? 'keep' : 'video') : 'edit')
     : (idea.media_type === 'image' ? 'draw' : 'frame');
 
   const scene = idea.generated_image_prompt?.trim() ?? '';
@@ -167,6 +196,35 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
       .update({ status: 'draft', approved_at: null, rejected_reason: reason })
       .eq('id', idea.id);
   };
+
+  // ── 1a. the ad that already exists ──────────────────────────────────
+  //
+  // Nothing is submitted and nothing is charged. The picture on this row was
+  // drawn from this row's own instruction and the operator has looked at it, so
+  // approving it means keeping it — the file stops being a preview and becomes
+  // the ad. Buying another roll of the same sentence here would hand back a
+  // DIFFERENT picture from the one that was approved, which is the one thing
+  // an approval must never do.
+  if (shape === 'keep') {
+    const { error: promoteError } = await db.from('generated_assets')
+      .update({ role: 'ad' })
+      .eq('ad_idea_id', idea.id).eq('role', 'preview').eq('state', 'success')
+      .eq('attempt', attempt).is('rejected_at', null);
+    if (promoteError) {
+      await unclaim(`Could not keep the picture: ${promoteError.message}`);
+      throw new Error(`Could not keep the picture: ${promoteError.message}`);
+    }
+    await db.from('ad_ideas')
+      .update({ status: 'generated', rejected_reason: null }).eq('id', idea.id);
+    return {
+      ideaId: idea.id,
+      taskId: '',
+      credits: 0,
+      usd: 0,
+      did: 'Kept. The picture you looked at is the ad — it was paid for when it was made, '
+        + 'so this costs nothing.',
+    };
+  }
 
   // ── 2. reserve the spend, which is where the ceiling is enforced ────
   //
@@ -209,6 +267,16 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
         'video',
       );
       reservations.push(videoSpendId);
+    } else if (shape === 'video') {
+      // The frame on this row was bought and charged already. Reserving the
+      // row's whole estimate here would charge for it twice — quietly, because
+      // both lines are correct-looking and only their sum is wrong.
+      spendId = await reserve(
+        idea.est_credits - IMAGE_CREDITS,
+        cents(idea.est_usd - usd(IMAGE_CREDITS)),
+        'video',
+      );
+      reservations.push(spendId);
     } else {
       spendId = await reserve(idea.est_credits, idea.est_usd, idea.media_type);
       reservations.push(spendId);
@@ -228,7 +296,7 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
   // both the claim and the reservations are still reversible. There is nothing
   // to stage when the picture is about to be made rather than edited.
   let sourceUrl: string | null = null;
-  if (shape === 'edit') {
+  if (shape === 'edit' || shape === 'video') {
     try {
       sourceUrl = await mirrorForKie({
         campaignId: idea.campaign_id, url: idea.source_image_url as string,
@@ -246,7 +314,8 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
   // attached by hand since then changes which model runs.
   const model = shape === 'edit'
     ? (idea.media_type === 'image' ? IMAGE_MODEL : VIDEO_MODEL)
-    : TEXT_IMAGE_MODEL;
+    : shape === 'video' ? VIDEO_MODEL
+      : TEXT_IMAGE_MODEL;
   const promptSent = shape === 'frame' ? scene : idea.kie_prompt;
 
   // ── 3. submit. ONE createTask, EVER. Never retried. ─────────────────
@@ -315,18 +384,288 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
   // counts against the ceiling, which is the safe direction to be wrong in.
   await db.from('spend_log').update({ asset_id: asset.id }).eq('id', spendId);
 
+  const chargedCredits = shape === 'video' ? idea.est_credits - IMAGE_CREDITS : idea.est_credits;
+  const chargedUsd = shape === 'video'
+    ? cents(idea.est_usd - usd(IMAGE_CREDITS)) : idea.est_usd;
+
   return {
     ideaId: idea.id,
     taskId,
-    credits: idea.est_credits,
-    usd: idea.est_usd,
-    did: shape === 'frame'
+    credits: chargedCredits,
+    usd: chargedUsd,
+    did: shape === 'video'
+      ? `Submitted. The picture it opens on was already made and paid for, so this is the shot `
+        + `only — about three minutes, $${chargedUsd.toFixed(2)} estimated.`
+      : shape === 'frame'
       ? 'Submitted. The picture it opens on is being made first, then the video starts on '
         + `its own — about four minutes altogether, $${idea.est_usd.toFixed(2)} estimated.`
       : `Submitted. About ${idea.media_type === 'image' ? 'a minute' : 'three minutes'}, `
         + `$${idea.est_usd.toFixed(2)} estimated.`
         + (shape === 'draw' ? ' No photograph of yours fitted this one, so the picture is '
           + 'being made from the description above.' : ''),
+  };
+}
+
+/**
+ * Draw the picture for a row that has no photograph, and show it to the
+ * operator BEFORE they decide.
+ *
+ * WHY THIS EXISTS. A row with no photograph used to carry its picture as a
+ * paragraph of prose and nothing else — the card said what would be made, the
+ * file only came into existence after Approve, and Approve was disabled on
+ * exactly those rows. So sixty ideas sat in front of a person with nothing to
+ * look at and no button that worked. The description was never the deliverable;
+ * it was the receipt for a decision nobody could make.
+ *
+ * IT DOES NOT COST MORE. It is the same single call the approval would have
+ * made, at the same four credits, moved to the front of the decision instead of
+ * behind it. For a static the file it produces IS the ad, and Approve keeps it
+ * for nothing. For a video it is the opening frame, which that approval was
+ * always going to buy first — so what changes there is that $1.24 of camera
+ * move is now spent by somebody who has seen the frame.
+ *
+ * IT IS STILL A CLICK. Nothing in this app draws anything on its own; this is a
+ * second button that spends rather than a step that spends by itself, and the
+ * ceiling is enforced here exactly as it is on Approve.
+ */
+export async function makePicture(idea: IdeaRowForSubmit): Promise<ApproveResult> {
+  const db = serviceClient();
+  const attempt = Math.max(1, Math.round(Number(idea.attempt ?? 1)));
+
+  if (idea.source_image_url) {
+    throw new Error(
+      idea.source_image_generated
+        ? 'This one already has a picture. Send it back if you want a different one.'
+        : 'This one already has one of your photographs on it, so there is nothing to draw. '
+          + 'Approve it, or point it at a different photo.',
+    );
+  }
+
+  /**
+   * Which sentence to draw from, and it differs by media type for the same
+   * reason the two fields exist. A static's whole instruction IS the scene. A
+   * video's `kie_prompt` is the camera move, which describes nothing to
+   * photograph, so its frame has its own field.
+   */
+  const scene = (idea.media_type === 'image'
+    ? idea.kie_prompt
+    : idea.generated_image_prompt)?.trim() ?? '';
+  if (!scene) {
+    throw new Error(
+      'No picture has been described for this one yet, so there is nothing to draw. '
+      + 'Attach one of your photographs instead, or send it back so the picture can be written.',
+    );
+  }
+
+  // ── 1. claim, the same conditional update Approve uses ──────────────
+  // 'generating' is the truth while this is in flight, and it is also the
+  // double-click guard: a second click re-checks its WHERE against the
+  // committed row and matches nothing. The poller puts the row back to 'draft'
+  // when the picture lands, because a picture is not an approval.
+  const { data: claimed, error: claimError } = await db.from('ad_ideas')
+    .update({ status: 'generating', rejected_reason: null })
+    .eq('id', idea.id).eq('status', 'draft')
+    .select('id').maybeSingle();
+  if (claimError) throw new Error(`Could not take this idea: ${claimError.message}`);
+  if (!claimed) {
+    throw new Error('This idea is not waiting — it is already being made, or has moved on.');
+  }
+
+  const unclaim = async (reason: string) => {
+    await db.from('ad_ideas')
+      .update({ status: 'draft', rejected_reason: reason }).eq('id', idea.id);
+  };
+
+  // ── 2. reserve, which is where the ceiling is enforced ──────────────
+  let spendId: string;
+  try {
+    const { data, error } = await db.rpc('reserve_spend', {
+      cid: idea.campaign_id,
+      cr: IMAGE_CREDITS,
+      amount: usd(IMAGE_CREDITS),
+      note: `estimate · picture${attempt > 1 ? ` · attempt ${attempt}` : ''} · `
+        + `${idea.headline.slice(0, 60)}`,
+    });
+    if (error) throw new Error(error.message);
+    spendId = data as string;
+  } catch (e) {
+    const message = (e as Error).message;
+    await unclaim(message);
+    throw new Error(
+      /ceiling/i.test(message)
+        ? `This campaign has reached its spend ceiling, so nothing was made. ${message}`
+        : `Could not check this campaign's spend before drawing: ${message}`,
+    );
+  }
+
+  // ── 3. submit. ONE createTask, EVER. Never retried. ─────────────────
+  // The shape it is drawn at is the shape it will be used at: 4:5 for a static
+  // in a feed, 9:16 for a frame a video is about to move through. A frame drawn
+  // at 4:5 and handed to the video model is a crop nobody asked for.
+  let taskId: string;
+  try {
+    const result = await submitImageFromText({
+      prompt: scene,
+      aspect: idea.media_type === 'image' ? IMAGE_ASPECT : VIDEO_ASPECT,
+    });
+    taskId = result.taskId;
+  } catch (e) {
+    await db.from('spend_log').delete().eq('id', spendId);
+    await unclaim((e as Error).message);
+    throw e;
+  }
+
+  // ── 4. write the task id down before anything else ──────────────────
+  const { data: asset, error: assetError } = await db.from('generated_assets').insert({
+    ad_idea_id: idea.id,
+    clip_index: null,
+    kie_task_id: taskId,
+    kie_model: TEXT_IMAGE_MODEL,
+    state: 'submitted',
+    attempt,
+    // 'preview' is what stops the poller calling this the finished ad. For a
+    // static it becomes the ad on Approve; for a video it becomes the frame the
+    // shot opens on. Either way it is not an ad until a person says so.
+    role: 'preview',
+    prompt_used: scene,
+  }).select('id').single();
+
+  if (assetError || !asset) {
+    await db.from('ad_ideas').update({
+      status: 'failed',
+      rejected_reason: `The picture was submitted to KIE as task ${taskId} and BILLED, but the `
+        + `record could not be saved (${assetError?.message ?? 'no row returned'}). It is being `
+        + 'made and can be fetched with that task id.',
+    }).eq('id', idea.id);
+    throw new Error(
+      `Submitted as task ${taskId} — it is running and has been charged — but recording it `
+      + `failed: ${assetError?.message ?? 'no row returned'}`,
+    );
+  }
+
+  await db.from('spend_log').update({ asset_id: asset.id }).eq('id', spendId);
+
+  return {
+    ideaId: idea.id,
+    taskId,
+    credits: IMAGE_CREDITS,
+    usd: usd(IMAGE_CREDITS),
+    did: `Drawing it — about half a minute, $${usd(IMAGE_CREDITS).toFixed(2)}. `
+      + (idea.media_type === 'image'
+        ? 'What comes back is the ad itself, so Approve after it lands keeps it and costs '
+          + 'nothing more.'
+        : 'What comes back is the frame the shot opens on. The camera move is only bought '
+          + 'when you approve it.'),
+  };
+}
+
+/**
+ * Draw every picture a campaign is missing, in one go.
+ *
+ * Sequential on purpose. Sixty submits fired at once is a burst against a
+ * rate-limited API whose failures cost money to diagnose, and each one is a
+ * fast POST — the picture itself is made asynchronously and collected by the
+ * poller. The ceiling is enforced per row inside `makePicture`, so a campaign
+ * that runs out mid-way stops there rather than half-charging anything.
+ */
+export async function makeAllPictures(campaignId: string): Promise<{
+  started: number; skipped: number; credits: number; usd: number; notes: string[];
+}> {
+  const db = serviceClient();
+  const { data, error } = await db.from('ad_ideas')
+    .select('*')
+    .eq('campaign_id', campaignId).eq('status', 'draft')
+    .is('source_image_url', null)
+    .not('generated_image_prompt', 'is', null)
+    .order('persona_id').order('idea_index');
+  if (error) throw new Error(`Could not read this campaign's ideas: ${error.message}`);
+
+  const rows = (data ?? []) as unknown as IdeaRowForSubmit[];
+  const notes: string[] = [];
+  let started = 0;
+
+  for (const row of rows) {
+    try {
+      await makePicture(row);
+      started++;
+    } catch (e) {
+      const message = (e as Error).message;
+      notes.push(`${row.headline.slice(0, 50)}: ${message}`);
+      // A ceiling stops the whole run. Carrying on would mean every remaining
+      // row failing for the same reason, sixty lines of identical noise, and a
+      // wait for it.
+      if (/ceiling/i.test(message)) {
+        notes.push('Stopped at the spend ceiling. Nothing after this one was submitted.');
+        break;
+      }
+    }
+  }
+
+  return {
+    started,
+    skipped: rows.length - started,
+    credits: started * IMAGE_CREDITS,
+    usd: usd(started * IMAGE_CREDITS),
+    notes,
+  };
+}
+
+/**
+ * Put a picture that exists on the landing page the ad points at.
+ *
+ * THE AD AND ITS PAGE SHOULD SHOW THE SAME THING. Somebody clicks a picture and
+ * arrives somewhere; if the top of that page is a different picture, or no
+ * picture, the click has to be re-earned. The persona page already has a slot
+ * of its own that beats the campaign-wide one, so this is a write, not a build.
+ *
+ * `onlyIfEmpty` is how it runs by itself when a picture lands: the FIRST
+ * picture made for a buyer becomes their page's hero, and after that the page
+ * is left alone unless somebody chooses otherwise on a card. Three ads point at
+ * one page and the page can only wear one of them, so the alternative is the
+ * third picture silently replacing a hero the operator chose.
+ */
+export async function putOnLandingPage(input: {
+  ideaId: string;
+  onlyIfEmpty: boolean;
+}): Promise<{ did: string; changed: boolean }> {
+  const db = serviceClient();
+  const { data: ideaRow, error } = await db.from('ad_ideas')
+    .select('id, persona_id, source_image_url, source_image_generated, visual_concept')
+    .eq('id', input.ideaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  const idea = ideaRow as unknown as {
+    persona_id: string | null; source_image_url: string | null;
+    source_image_generated: boolean | null; visual_concept: string | null;
+  } | null;
+
+  if (!idea?.source_image_url) {
+    throw new Error('This idea has no picture on it yet, so there is nothing to put on the page.');
+  }
+  if (!idea.persona_id) {
+    throw new Error('This idea is not attached to a buyer, so it has no page of its own.');
+  }
+
+  const { data: personaRow } = await db.from('personas')
+    .select('id, custom_hero_image_url').eq('id', idea.persona_id).maybeSingle();
+  const persona = personaRow as unknown as { custom_hero_image_url: string | null } | null;
+  if (!persona) throw new Error('That buyer no longer exists.');
+
+  if (input.onlyIfEmpty && persona.custom_hero_image_url) {
+    return { did: 'The page already has a picture at the top of it.', changed: false };
+  }
+
+  const { error: writeError } = await db.from('personas').update({
+    custom_hero_image_url: idea.source_image_url,
+    // Describes the photograph, not the ad — it is read out to somebody who
+    // cannot see it. `visual_concept` is the nearest true sentence we hold.
+    custom_hero_image_alt: idea.visual_concept ?? '',
+  }).eq('id', idea.persona_id);
+  if (writeError) throw new Error(writeError.message);
+
+  return {
+    did: 'Put at the top of this buyer\'s landing page, so the ad and the page they land on '
+      + 'show the same picture.',
+    changed: true,
   };
 }
 
@@ -390,6 +729,7 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
     }
 
     const isFrame = asset.role === 'first_frame';
+    const isPreview = asset.role === 'preview';
 
     if (status.state === 'fail') {
       failed++;
@@ -400,8 +740,14 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
         completed_at: new Date().toISOString(),
       }).eq('id', asset.id);
       await db.from('ad_ideas').update({
-        status: 'failed',
-        rejected_reason: isFrame
+        // A picture that could not be drawn has not failed the AD — the words
+        // are untouched and nothing was approved. The row goes back to waiting
+        // with the reason on it, and the button is there to try again.
+        status: isPreview ? 'draft' : 'failed',
+        rejected_reason: isPreview
+          ? `The picture could not be drawn (${status.failMessage ?? 'KIE gave no reason'}). `
+            + 'Nothing was charged. Try it again, or rewrite the instruction first.'
+          : isFrame
           ? `The picture the video opens on could not be made (${status.failMessage ?? 'KIE gave no reason'}), `
             + 'so the video was never started. Neither was charged.'
           : status.failMessage ?? 'The generation failed at KIE.',
@@ -426,6 +772,11 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
 
     if (isFrame) {
       await settleFirstFrame({ campaignId, asset, url, credits: status.creditsConsumed, notes });
+      continue;
+    }
+
+    if (isPreview) {
+      await settlePreview({ campaignId, asset, url, credits: status.creditsConsumed, notes });
       continue;
     }
 
@@ -465,6 +816,78 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
   }
 
   return { checked: live.length, finished, failed, notes };
+}
+
+/**
+ * A drawn picture has landed. Put it on the row and stop.
+ *
+ * NOTHING IS SUBMITTED HERE, and that is the whole difference between this and
+ * the frame below. A frame is the first half of an approval already given, so
+ * it spends again the moment it lands. A picture is the thing the operator
+ * asked to LOOK at, so it goes back in front of them as a draft and waits.
+ *
+ * It also lands on the buyer's page. An ad and the page it points at showing
+ * two different pictures — or the ad showing one and the page showing none — is
+ * a click that has to be won twice. First picture for that buyer wins; after
+ * that the page keeps what it has unless somebody chooses otherwise on a card.
+ */
+async function settlePreview(input: {
+  campaignId: string;
+  asset: { id: string; ad_idea_id: string; kie_task_id: string; attempt: number };
+  url: string;
+  credits: number | null;
+  notes: string[];
+}): Promise<void> {
+  const db = serviceClient();
+  const { asset, notes } = input;
+
+  let stored: string | null = null;
+  try {
+    stored = await storeResult({ campaignId: input.campaignId, assetId: asset.id, url: input.url });
+  } catch (e) {
+    notes.push('A picture was drawn but could not be copied into your own storage '
+      + `(${(e as Error).message}). KIE's temporary copy is on the row and expires in a few days.`);
+  }
+
+  await db.from('generated_assets').update({
+    state: 'success',
+    result_url: input.url,
+    stored_url: stored,
+    credits_charged: input.credits ?? null,
+    completed_at: new Date().toISOString(),
+  }).eq('id', asset.id);
+
+  await db.from('ad_ideas').update({
+    source_image_url: stored ?? input.url,
+    // Never inferred from the URL. Once this is written the picture is
+    // indistinguishable from one of the seller's own, and it decides which
+    // model Approve runs — so getting it wrong buys a retouched copy of a
+    // finished ad.
+    source_image_generated: true,
+    // Back to waiting on a person. A picture is not an approval.
+    status: 'draft',
+    rejected_reason: null,
+  }).eq('id', asset.ad_idea_id);
+
+  if (input.credits != null) {
+    await db.from('spend_log').delete().eq('asset_id', asset.id);
+    await db.from('spend_log').insert({
+      campaign_id: input.campaignId,
+      asset_id: asset.id,
+      credits: Math.round(input.credits),
+      usd: usd(input.credits),
+      note: `charged by KIE · picture${asset.attempt > 1 ? ` · attempt ${asset.attempt}` : ''}`,
+    });
+  }
+
+  try {
+    await putOnLandingPage({ ideaId: asset.ad_idea_id, onlyIfEmpty: true });
+  } catch (e) {
+    // The picture is made, paid for and on the row. The page not getting it is
+    // worth saying and is not worth failing the poll over.
+    notes.push(`The picture was made, but could not be put on the buyer's page `
+      + `(${(e as Error).message}).`);
+  }
 }
 
 /**
@@ -531,6 +954,17 @@ async function settleFirstFrame(input: {
       usd: usd(input.credits),
       note: `charged by KIE · opening frame${asset.attempt > 1 ? ` · attempt ${asset.attempt}` : ''}`,
     });
+  }
+
+  // Same rule as a drawn still: the buyer's page wears the first picture made
+  // for them. A video's opening frame is a real photograph of that buyer's
+  // situation, and a page with nothing at the top of it is worse than a page
+  // whose hero is the frame the ad opened on.
+  try {
+    await putOnLandingPage({ ideaId: asset.ad_idea_id, onlyIfEmpty: true });
+  } catch {
+    // Non-fatal, and the video submit below is the important half of this
+    // function. The page simply keeps whatever it had.
   }
 
   const { data: ideaRow } = await db.from('ad_ideas')

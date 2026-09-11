@@ -203,9 +203,11 @@ type GeneratedAsset = {
   /**
    * 'ad' is the file the operator is buying. 'first_frame' is the picture a
    * video with no photograph opens on — a step on the way, never the result.
-   * Null on everything made before there was anything but ads.
+   * 'preview' is a picture drawn to be LOOKED at before approving: for a static
+   * it becomes the ad on Approve, for a video it becomes the frame the shot
+   * opens on. Null on everything made before there was anything but ads.
    */
-  role: 'ad' | 'first_frame' | null;
+  role: 'ad' | 'first_frame' | 'preview' | null;
 };
 
 type AdIdea = {
@@ -283,6 +285,20 @@ const BETWEEN_UNITS_MS = 700;
  * without being a hammer.
  */
 const ASSET_POLL_MS = 10_000;
+
+/**
+ * What one drawn picture costs — four KIE credits at half a cent each.
+ *
+ * Written here rather than read off the row because the row's estimate is the
+ * cost of the whole ad, and for a video those are different numbers: $1.26 to
+ * approve, of which two cents is the frame it opens on.
+ */
+const PICTURE_USD = 0.02;
+
+/** Cents matter at this price. A picture is $0.02 and rounds to "$0.02", not "$0". */
+function money(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
 
 /**
  * What "something actually happened" reduces to.
@@ -500,6 +516,30 @@ export function CampaignProgress({ id }: { id: string }) {
     },
     [api, id, refresh],
   );
+
+  /**
+   * Draw every picture the campaign is missing, in one press.
+   *
+   * It spends, so it is never called by the poll timer above — only from a
+   * button, with the total on it.
+   */
+  const makePictures = useCallback(async () => {
+    const result = await api<{
+      started: number; skipped: number; usd: number; notes: string[];
+    }>(`/api/campaigns/${id}/assets`, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'make-pictures' }),
+    });
+    setLog((l) => [
+      ...l,
+      result.started
+        ? `Drawing ${result.started} picture${result.started === 1 ? '' : 's'} — `
+          + `$${result.usd.toFixed(2)}. They land on the cards as they finish.`
+        : 'Nothing to draw.',
+      ...result.notes,
+    ].slice(-40));
+    await refresh();
+  }, [api, id, refresh]);
 
   /**
    * Send one step back to be done again.
@@ -835,7 +875,9 @@ export function CampaignProgress({ id }: { id: string }) {
       {/* Above the formats, because once the ideas exist they are what the
           operator opens this screen for. The formats become the evidence
           underneath them, the same way the ads are evidence for the formats. */}
-      {ideas.length ? <Ideas ideas={ideas} spend={spend} onAction={ideaAction} /> : null}
+      {ideas.length
+        ? <Ideas ideas={ideas} spend={spend} onAction={ideaAction} onMakePictures={makePictures} />
+        : null}
 
       {formats.length ? <Formats formats={formats} scan={scan} /> : null}
 
@@ -1937,12 +1979,14 @@ function LivePages({
  * word on the wording belongs to the person whose product it is.
  */
 function Ideas({
-  ideas, spend, onAction,
+  ideas, spend, onAction, onMakePictures,
 }: {
   ideas: AdIdea[];
   spend: Spend;
   onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }>;
+  onMakePictures: () => Promise<void>;
 }) {
+  const [drawingAll, setDrawingAll] = useState(false);
   // Grouped in the order they arrive, which the server has already put in buyer
   // order. Rebuilding the order here would be a second opinion about it.
   const groups: { personaId: string; name: string; items: AdIdea[] }[] = [];
@@ -1963,6 +2007,12 @@ function Ideas({
   const running = ideas.filter((i) => i.status === 'generating' || i.status === 'approved');
   const outstanding = waiting.reduce((n, i) => n + Number(i.est_usd), 0);
 
+  // Rows that have a picture written and no picture. Until one is drawn there
+  // is nothing on the card to look at and Approve has nothing to send, so this
+  // is the queue that has to clear before any of these can be decided.
+  const undrawn = waiting.filter((i) => !i.source_image_url && i.generated_image_prompt);
+  const drawAllUsd = undrawn.length * PICTURE_USD;
+
   return (
     <div className="mt-6">
       <Card>
@@ -1975,10 +2025,44 @@ function Ideas({
           Manager by you, so the wording is yours.
         </p>
         <p className="mt-2 text-sm leading-6 text-zinc-500">
-          <span className="font-semibold text-zinc-700">Nothing has been made and nothing has
-            been charged</span>{' '}
-          until you press Approve on a row. That is the only button in this app that spends money.
+          <span className="font-semibold text-zinc-700">Nothing is made and nothing is
+            charged</span>{' '}
+          until you press a button on a row. Two of them spend: Approve, and{' '}
+          <span className="font-semibold text-zinc-700">Make the picture</span> on a row that has
+          no photograph — {money(PICTURE_USD)}, so you can look at the picture before you decide
+          rather than after.
         </p>
+
+        {/* The queue that blocks every other decision. A row with no picture
+            has nothing on it to judge, so telling the operator how many of
+            those there are is more use than any other number on this screen. */}
+        {undrawn.length ? (
+          <div className="mt-4 rounded-[var(--radius-brand-card)] bg-zinc-50 p-4 ring-1 ring-zinc-200">
+            <p className="text-sm font-semibold text-zinc-800">
+              {undrawn.length} of these have no picture yet
+            </p>
+            <p className="mt-1 text-sm leading-6 text-zinc-500">
+              None of your photographs fitted them, so their picture has to be drawn from the
+              description on the card. Each one is {money(PICTURE_USD)}. For a static that
+              picture <span className="font-semibold text-zinc-700">is the ad</span> — approving
+              it afterwards keeps it and costs nothing more. For a video it is the frame the
+              shot opens on, which an approval was always going to buy first.
+            </p>
+            <div className="mt-3">
+              <Button
+                disabled={drawingAll}
+                onClick={async () => {
+                  setDrawingAll(true);
+                  try { await onMakePictures(); } finally { setDrawingAll(false); }
+                }}
+              >
+                {drawingAll
+                  ? 'Starting them…'
+                  : `Draw all ${undrawn.length} — ${money(drawAllUsd)}`}
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat label="Waiting on you" value={String(waiting.length)} />
@@ -2110,6 +2194,27 @@ function IdeaRow({
   const cost = Number(idea.est_usd);
   const attempt = Math.max(1, Number(idea.attempt ?? 1));
   const canRedo = idea.status === 'generated' || idea.status === 'failed';
+
+  /** The picture on this row was drawn by us rather than photographed by them. */
+  const drawn = Boolean(idea.source_image_url) && Boolean(idea.source_image_generated);
+  /** Nothing to look at and nothing Approve can send: the picture has to be drawn first. */
+  const needsPicture = !idea.source_image_url && Boolean(idea.generated_image_prompt);
+  /**
+   * What Approve costs FROM HERE, which is not always the row's estimate.
+   *
+   * A drawn static is finished and paid for, so approving it is free. A video
+   * whose frame has been drawn has two cents of its estimate already spent.
+   * Showing the full estimate on either would be charging the operator twice on
+   * screen for something they are only charged for once.
+   */
+  const approveCost = drawn
+    ? (idea.media_type === 'image' ? 0 : Math.max(0, cost - PICTURE_USD))
+    : cost;
+  /** True while the thing in flight is the picture rather than the ad. */
+  const drawingNow = idea.status === 'generating'
+    && idea.generated_assets.some(
+      (a) => a.role === 'preview' && (a.state === 'submitted' || a.state === 'generating'),
+    );
 
   /**
    * Open the editor on what the row says RIGHT NOW.
@@ -2274,12 +2379,21 @@ function IdeaRow({
             ) : null}
             <div className="min-w-0 text-sm leading-6 text-zinc-600">
               <p>{idea.visual_concept}</p>
-              {!idea.source_image_url && idea.generated_image_prompt ? (
+              {needsPicture ? (
                 <p className="mt-1 text-xs font-semibold text-zinc-500">
-                  None of your photographs fitted this one, so the picture will be made from
-                  the description below. It shows the buyer&rsquo;s situation, never your
-                  product — nobody has photographed it, so anything drawn of it would be
-                  invented.
+                  None of your photographs fitted this one, so the picture has to be drawn from
+                  the description below — {money(PICTURE_USD)}, and you look at it before you
+                  approve anything. It shows the buyer&rsquo;s situation, never your product:
+                  nobody has photographed it, so anything drawn of it would be invented.
+                </p>
+              ) : null}
+              {drawn ? (
+                <p className="mt-1 text-xs font-semibold text-zinc-500">
+                  {idea.media_type === 'image'
+                    ? 'This picture was drawn, not photographed, and it is the ad. Approving it '
+                      + 'keeps it and costs nothing more.'
+                    : 'This picture was drawn, not photographed. It is the frame the shot opens '
+                      + 'on, and it is already paid for.'}
                 </p>
               ) : null}
               {!idea.source_image_url && !idea.generated_image_prompt ? (
@@ -2349,6 +2463,38 @@ function IdeaRow({
           </details>
         </>
       )}
+
+      {/* The drawn picture, at a size somebody can actually judge.
+          The thumbnail above is an identifier; this is the decision. A static's
+          drawn picture is the finished ad and an 80-pixel square is not enough
+          to approve one from — which is the whole complaint this was built
+          for: sixty rows with nothing on them to look at. */}
+      {drawn && !fileUrl ? (
+        <div className="mt-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={idea.source_image_url as string}
+            alt={idea.visual_concept}
+            loading="lazy"
+            className="w-full max-w-[420px] rounded-[var(--radius-brand-card)] border border-black/10"
+          />
+          <p className="mt-2 text-xs text-zinc-400">
+            Drawn from the description, {money(PICTURE_USD)} charged.{' '}
+            {idea.media_type === 'image'
+              ? 'This is the ad. Approve keeps it; sending it back draws a different one.'
+              : 'This is the first frame. Approve buys the ten-second move through it.'}{' '}
+            <a
+              href={idea.source_image_url as string}
+              download
+              target="_blank"
+              rel="noopener"
+              className="underline hover:text-zinc-700"
+            >
+              Download
+            </a>
+          </p>
+        </div>
+      ) : null}
 
       {fileUrl ? (
         <div className="mt-4">
@@ -2440,9 +2586,12 @@ function IdeaRow({
 
       {idea.status === 'generating' || idea.status === 'approved' ? (
         <p className="mt-4 rounded-[var(--radius-brand-card)] bg-accent-tint px-4 py-3 text-sm text-accent-deep">
-          Being made now — about {idea.media_type === 'image' ? 'a minute' : 'three minutes'}.
-          This screen checks every ten seconds. Closing the tab does not cancel it; the file is
-          collected next time you open the campaign.
+          {drawingNow
+            ? 'Drawing the picture — about half a minute. It comes back here as a draft for you '
+              + 'to look at; nothing is approved by this.'
+            : `Being made now — about ${idea.media_type === 'image' ? 'a minute' : 'three minutes'}.`}
+          {' '}This screen checks every ten seconds. Closing the tab does not cancel it; the file
+          is collected next time you open the campaign.
         </p>
       ) : null}
 
@@ -2536,6 +2685,21 @@ function IdeaRow({
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-200 pt-4">
           {idea.status === 'draft' ? (
             <>
+              {/* The button that unblocks the row. Before this existed, a row
+                  with no photograph showed a paragraph of prose and a disabled
+                  Approve — nothing to look at and no way forward. */}
+              {needsPicture ? (
+                <Button
+                  disabled={busy !== null}
+                  onClick={() => run('make-picture', {
+                    method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+                  })}
+                >
+                  {busy === 'make-picture'
+                    ? 'Drawing it…'
+                    : `Make the picture — ${money(PICTURE_USD)}`}
+                </Button>
+              ) : null}
               <Button
                 disabled={busy !== null || !idea.source_image_url}
                 onClick={() => run('approve', {
@@ -2544,9 +2708,11 @@ function IdeaRow({
               >
                 {busy === 'approve'
                   ? 'Submitting…'
-                  : attempt > 1
-                    ? `Approve attempt ${attempt} — $${cost.toFixed(2)}`
-                    : `Approve — $${cost.toFixed(2)}`}
+                  : approveCost === 0
+                    ? 'Keep it — nothing more to pay'
+                    : attempt > 1
+                      ? `Approve attempt ${attempt} — ${money(approveCost)}`
+                      : `Approve — ${money(approveCost)}`}
               </Button>
               <Button variant="ghost" disabled={busy !== null} onClick={startEditing}>
                 Rewrite it
@@ -2591,6 +2757,23 @@ function IdeaRow({
                 Rewrite it
               </Button>
             </>
+          ) : null}
+
+          {/* Costs nothing — the picture already exists. It decides which of
+              this buyer's three ads their landing page is wearing, so that
+              somebody who clicks this picture arrives at it rather than at a
+              different one, or at none. The first picture drawn for a buyer
+              takes the slot on its own; this is how to overrule that. */}
+          {idea.source_image_url ? (
+            <Button
+              variant="ghost"
+              disabled={busy !== null}
+              onClick={() => run('use-on-page', {
+                method: 'POST', body: JSON.stringify({ action: 'use-on-page' }),
+              })}
+            >
+              {busy === 'use-on-page' ? 'Putting it on the page…' : 'Use this on the landing page'}
+            </Button>
           ) : null}
 
           <CopyButton text={paste} label="Copy for Ads Manager" />

@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { serviceClient } from '@/lib/supabase';
-import { approveIdea, type IdeaRowForSubmit } from '@/lib/pipeline/assets';
+import {
+  approveIdea, makePicture, putOnLandingPage, type IdeaRowForSubmit,
+} from '@/lib/pipeline/assets';
 import { revisePrompt } from '@/lib/pipeline/revise';
 import { CTA_LABELS } from '@/lib/ad-fields';
 
@@ -16,16 +18,21 @@ export const maxDuration = 180;
  * One row of the ideas table.
  *
  *   PATCH  rewrite it
- *   POST   { action: 'approve' | 'reject' | 'reset' | 'redo' }
+ *   POST   { action: 'approve' | 'reject' | 'reset' | 'redo' | 'make-picture'
+ *            | 'use-on-page' }
  *
  * WHY EDITING EXISTS AT ALL. These rows get pasted into Ads Manager by hand, so
  * the operator has the last word on every sentence. An approve-only table would
  * make a single wrong word into "reject and hope the next roll is better",
  * which is both slower and more expensive than changing the word.
  *
- * APPROVE IS THE ONLY BUTTON IN THIS APP THAT SPENDS MONEY. Everything it has
- * to get right — the double-click guard, the ceiling, the one-submit-ever rule
- * — lives in lib/pipeline/assets.ts; this route is the door.
+ * TWO BUTTONS HERE SPEND MONEY: `approve`, and `make-picture` on a row that has
+ * no photograph. They are not two charges for one ad — `make-picture` is the
+ * front half of the same approval, moved in front of the decision so the
+ * operator can see the picture before saying yes to it, and `approve` charges
+ * only for what is left. Everything they have to get right — the double-click
+ * guard, the ceiling, the one-submit-ever rule — lives in
+ * lib/pipeline/assets.ts; this route is the door.
  *
  * `redo` is deliberately NOT a second spending button. It rejects a finished
  * file, rewrites the instruction from what the operator says was wrong with it,
@@ -114,7 +121,7 @@ export async function PATCH(
 }
 
 const ActionSchema = z.object({
-  action: z.enum(['approve', 'reject', 'reset', 'redo']),
+  action: z.enum(['approve', 'reject', 'reset', 'redo', 'make-picture', 'use-on-page']),
   reason: z.string().max(1000).optional(),
   /**
    * What is wrong with the finished file, for `redo`. Optional on purpose: an
@@ -203,9 +210,28 @@ async function redoIdea(
   const attempt = Number(idea.attempt ?? 1);
 
   // ── 2. claim ────────────────────────────────────────────────────────
+  /**
+   * A STATIC'S DRAWN PICTURE IS THE THING BEING SENT BACK, so it has to leave
+   * the row with it.
+   *
+   * Its `kie_prompt` and its picture are the same object seen twice — the
+   * sentence was drawn to make the file. A redo rewrites the sentence, and if
+   * the file stayed attached, Approve would find a picture on the row and
+   * simply keep it: the rejected one, made from the instruction that was just
+   * replaced, approved without ever being drawn again.
+   *
+   * A VIDEO KEEPS ITS FRAME, and for the same reason read the other way. A
+   * video's `kie_prompt` is the camera move; the frame it opens on is written
+   * separately and has not been revised. Throwing it away would charge for an
+   * identical picture to fix a complaint about the motion.
+   */
+  const dropsItsPicture = Boolean(idea.source_image_generated)
+    && (idea.media_type as string) === 'image';
+
   const { data: claimed, error: claimError } = await db.from('ad_ideas').update({
     status: 'draft',
     kie_prompt: revised,
+    ...(dropsItsPicture ? { source_image_url: null, source_image_generated: false } : {}),
     ...(revisedConcept ? { visual_concept: revisedConcept } : {}),
     attempt: attempt + 1,
     redo_note: trimmed || null,
@@ -264,11 +290,28 @@ export async function POST(
     const parsed = ActionSchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) {
       return Response.json(
-        { error: 'action must be "approve", "reject", "reset" or "redo"' },
+        {
+          error: 'action must be "approve", "reject", "reset", "redo", "make-picture" '
+            + 'or "use-on-page"',
+        },
         { status: 400 },
       );
     }
     const db = serviceClient();
+
+    // Draws the picture for a row that has no photograph, so it can be looked
+    // at before it is approved. The second button in this app that spends, and
+    // it spends four credits — the same call the approval would have made,
+    // moved in front of the decision instead of behind it.
+    if (parsed.data.action === 'make-picture') {
+      return Response.json(await makePicture(idea as unknown as IdeaRowForSubmit));
+    }
+
+    // Costs nothing: the picture already exists. This only says which of a
+    // buyer's ads their landing page should be wearing.
+    if (parsed.data.action === 'use-on-page') {
+      return Response.json(await putOnLandingPage({ ideaId, onlyIfEmpty: false }));
+    }
 
     if (parsed.data.action === 'redo') {
       return await redoIdea(idea as Record<string, unknown>, parsed.data.note);
