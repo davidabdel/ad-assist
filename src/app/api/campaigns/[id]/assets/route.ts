@@ -1,5 +1,5 @@
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
-import { pollCampaignAssets } from '@/lib/pipeline/assets';
+import { makeAllPictures, pollCampaignAssets } from '@/lib/pipeline/assets';
 
 export const dynamic = 'force-dynamic';
 /**
@@ -30,6 +30,16 @@ export async function POST(
     const { id } = await params;
     const owner = await requireOwner(req);
     await requireCampaignOwner(owner, id);
+
+    // One deliberate exception to "this route only tidies up": drawing every
+    // missing picture at once. It spends — four credits a row — so it is a
+    // body on a POST that a person pressed, never part of the timer that calls
+    // this route with no body while the screen is open.
+    const body = await req.json().catch(() => ({})) as { action?: string };
+    if (body.action === 'make-pictures') {
+      return Response.json(await makeAllPictures(id));
+    }
+
     return Response.json(await pollCampaignAssets(id));
   } catch (e) {
     if (e instanceof AuthError) return Response.json({ error: e.message }, { status: e.status });

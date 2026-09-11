@@ -420,6 +420,223 @@ check('nothing was submitted', submits.length === beforeEmpty,
 check('and it reads as an instruction, not a stack trace',
   /nothing for the shot to move through/.test(b6.error ?? ''), (b6.error ?? '').slice(0, 100));
 
+// ── 7. drawing the picture BEFORE deciding ─────────────────────────
+//
+// The complaint this was built for: sixty rows whose picture existed only as a
+// paragraph of prose, and an Approve button disabled on every one of them. So
+// the picture is drawn first and looked at, and the approval that follows must
+// not pay for it twice, must not hand a drawn picture to a retoucher, and must
+// not quietly keep a picture the operator has just sent back.
+console.log('\ndrawing a static\'s picture before approving it');
+const { data: buyer3 } = await db.from('personas').insert([{
+  campaign_id: campaign.id,
+  persona_index: 3,
+  slug: 'buyer-3',
+  persona_name: 'Buyer 3',
+  primary_pain_point: 'pain',
+  core_desire: 'desire',
+  angle_hook: 'a',
+  custom_hero_headline: 'h',
+  custom_reasons: [],
+}]).select('id');
+const persona3 = buyer3[0].id;
+
+const { data: preview } = await db.from('ad_ideas').insert(seed(1, {
+  persona_id: persona3,
+  kie_model: 'google/nano-banana', kie_prompt: SCENE, generated_image_prompt: SCENE,
+})).select('id').single();
+
+const r7 = await api(`/api/campaigns/${campaign.id}/ideas/${preview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+});
+const b7 = await r7.json();
+check('make-picture is 200', r7.status === 200, JSON.stringify(b7).slice(0, 180));
+const s7 = submits.find((s) => s.taskId === b7.taskId);
+check('went to the DRAWING model', s7?.model === 'google/nano-banana', s7?.model);
+check('was handed no photograph', s7?.input?.image_urls === undefined,
+  JSON.stringify(s7?.input?.image_urls));
+check('4:5, because this picture IS the ad', s7?.input?.aspect_ratio === '4:5',
+  s7?.input?.aspect_ratio);
+check('it costs two cents, not the ad\'s estimate', b7.usd === 0.02, `${b7.usd}`);
+const a7 = await assetsFor(preview.id);
+check('recorded as a preview, not an ad', a7.length === 1 && a7[0].role === 'preview',
+  JSON.stringify(a7.map((a) => a.role)));
+
+// A second press while the first is in flight must not buy a second picture.
+const beforeDouble = submits.length;
+const rDouble = await api(`/api/campaigns/${campaign.id}/ideas/${preview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+});
+check('a second press while it is drawing is refused', rDouble.status === 409, `${rDouble.status}`);
+check('and bought nothing', submits.length === beforeDouble,
+  `${submits.length - beforeDouble} extra`);
+
+outcome.set(a7[0].kie_task_id, 'success');
+await api(`/api/campaigns/${campaign.id}/assets`, { method: 'POST' });
+
+const { data: previewRow } = await db.from('ad_ideas')
+  .select('status, source_image_url, source_image_generated').eq('id', preview.id).single();
+check('the picture is on the row', !!previewRow.source_image_url, previewRow.source_image_url);
+check('labelled as drawn, never as one of theirs',
+  previewRow.source_image_generated === true, `${previewRow.source_image_generated}`);
+check('the row is WAITING again — a picture is not an approval',
+  previewRow.status === 'draft', previewRow.status);
+
+const { data: hero3 } = await db.from('personas')
+  .select('custom_hero_image_url').eq('id', persona3).single();
+check('and the buyer\'s landing page is wearing it',
+  hero3.custom_hero_image_url === previewRow.source_image_url, `${hero3.custom_hero_image_url}`);
+
+// Approving it must keep THAT picture. Buying another roll here would hand back
+// a different picture from the one that was approved.
+const beforeKeep = submits.length;
+const spendBeforeKeep = (await spendFor()).length;
+const r7b = await api(`/api/campaigns/${campaign.id}/ideas/${preview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'approve' }),
+});
+const b7b = await r7b.json();
+check('approve is 200', r7b.status === 200, JSON.stringify(b7b).slice(0, 160));
+check('NOTHING was submitted — the ad already exists', submits.length === beforeKeep,
+  `${submits.length - beforeKeep} extra`);
+check('and nothing more was charged', (await spendFor()).length === spendBeforeKeep,
+  `${(await spendFor()).length - spendBeforeKeep} extra lines`);
+check('it was free, and says so', b7b.usd === 0, `${b7b.usd}`);
+const a7b = await assetsFor(preview.id);
+check('the preview became the ad', a7b.length === 1 && a7b[0].role === 'ad',
+  JSON.stringify(a7b.map((a) => a.role)));
+const { data: keptRow } = await db.from('ad_ideas')
+  .select('status').eq('id', preview.id).single();
+check('and the row is finished', keptRow.status === 'generated', keptRow.status);
+
+// ── 8. a drawn static sent back loses its picture ──────────────────
+//
+// Its instruction and its picture are the same object seen twice. If the file
+// stayed on the row after a redo rewrote the sentence, Approve would find a
+// picture and keep it: the rejected one, approved without being drawn again.
+console.log('\nsending a drawn static back');
+const r8 = await api(`/api/campaigns/${campaign.id}/ideas/${preview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'redo' }),
+});
+check('redo is 200', r8.status === 200, JSON.stringify(await r8.clone().json()).slice(0, 140));
+const { data: redoneRow } = await db.from('ad_ideas')
+  .select('status, source_image_url, source_image_generated').eq('id', preview.id).single();
+check('the rejected picture is off the row', !redoneRow.source_image_url,
+  `${redoneRow.source_image_url}`);
+check('so approving it cannot keep it', redoneRow.source_image_generated === false,
+  `${redoneRow.source_image_generated}`);
+
+// ── 9. a video whose frame was drawn buys only the shot ────────────
+console.log('\ndrawing a video\'s opening frame before approving it');
+const { data: vPreview } = await db.from('ad_ideas').insert(seed(2, {
+  persona_id: persona3,
+  media_type: 'video',
+  kie_model: 'bytedance/seedance-2-fast',
+  kie_prompt: 'The camera pushes slowly in over the bench.',
+  generated_image_prompt: SCENE,
+  video_storyboard: { beats: [], seconds: 10 },
+  est_credits: 252, est_usd: 1.26,
+})).select('id').single();
+
+const r9 = await api(`/api/campaigns/${campaign.id}/ideas/${vPreview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+});
+const b9 = await r9.json();
+check('make-picture is 200', r9.status === 200, JSON.stringify(b9).slice(0, 160));
+const s9 = submits.find((s) => s.taskId === b9.taskId);
+check('the frame is 9:16, the shape the video will be', s9?.input?.aspect_ratio === '9:16',
+  s9?.input?.aspect_ratio);
+check('it was handed the scene, not the camera move', s9?.input?.prompt === SCENE,
+  (s9?.input?.prompt ?? '').slice(0, 50));
+check('two cents, not $1.26', b9.usd === 0.02, `${b9.usd}`);
+
+const a9 = await assetsFor(vPreview.id);
+outcome.set(a9[0].kie_task_id, 'success');
+const beforeFrameSettle = submits.length;
+await api(`/api/campaigns/${campaign.id}/assets`, { method: 'POST' });
+check('NO video was submitted by the picture landing — it is not an approval',
+  submits.length === beforeFrameSettle, `${submits.length - beforeFrameSettle} extra`);
+const { data: vRow } = await db.from('ad_ideas')
+  .select('status, source_image_url').eq('id', vPreview.id).single();
+check('the frame is on the row and it is waiting on a person',
+  vRow.status === 'draft' && !!vRow.source_image_url, `${vRow.status}`);
+
+const r9b = await api(`/api/campaigns/${campaign.id}/ideas/${vPreview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'approve' }),
+});
+const b9b = await r9b.json();
+check('approve is 200', r9b.status === 200, JSON.stringify(b9b).slice(0, 160));
+const s9b = submits.find((s) => s.taskId === b9b.taskId);
+check('the VIDEO model ran, not the retoucher',
+  s9b?.model === 'bytedance/seedance-2-fast', s9b?.model);
+check('it opens on the frame that was drawn',
+  s9b?.input?.first_frame_url === vRow.source_image_url, s9b?.input?.first_frame_url);
+check('it was handed the camera move', s9b?.input?.prompt?.startsWith('The camera pushes'),
+  (s9b?.input?.prompt ?? '').slice(0, 40));
+check('and it was charged $1.24, NOT $1.26 — the frame is already paid for',
+  Math.abs(b9b.usd - 1.24) < 0.005, `${b9b.usd}`);
+// Read by asset rather than by note: the estimate line is deleted and replaced
+// with KIE's own figure once a task settles, and the replacement carries no
+// headline. Counting notes would count the frame twice on a slow poll and not
+// at all on a fast one.
+const vAssetIds = new Set((await assetsFor(vPreview.id)).map((a) => a.id));
+const vSpend = (await spendFor()).filter((s) => vAssetIds.has(s.asset_id));
+check('the ledger holds one picture line and one video line, no duplicate frame',
+  vSpend.length === 2 && vSpend.some((s) => s.credits === 4)
+  && vSpend.some((s) => s.credits === 248),
+  JSON.stringify(vSpend.map((s) => `${s.credits}cr ${(s.note ?? '').slice(0, 28)}`)));
+
+// ── 10. a drawn picture never goes to the retoucher ────────────────
+//
+// The single most expensive confusion available here: a picture this app drew
+// looks exactly like one of the seller's photographs on the row. Sent to the
+// editing model it would buy a second-generation copy of a finished ad.
+console.log('\nthe shape a drawn picture must never take');
+const editSubmits = submits.filter((s) => s.model === 'google/nano-banana-edit');
+check('only the row holding a real photograph ever reached the editing model',
+  editSubmits.length === 1, `${editSubmits.length} edits`);
+
+// ── 11. putting a picture on the page by hand ──────────────────────
+console.log('\nchoosing which picture the landing page wears');
+const rPage = await api(`/api/campaigns/${campaign.id}/ideas/${vPreview.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'use-on-page' }),
+});
+const bPage = await rPage.json();
+check('use-on-page is 200', rPage.status === 200, JSON.stringify(bPage).slice(0, 140));
+const { data: hero3b } = await db.from('personas')
+  .select('custom_hero_image_url').eq('id', persona3).single();
+check('it overrules the first picture, which is the point of the button',
+  hero3b.custom_hero_image_url === vRow.source_image_url, `${hero3b.custom_hero_image_url}`);
+check('and it charged nothing', !bPage.usd, `${bPage.usd}`);
+
+// ── 12. the ceiling stops a picture too ────────────────────────────
+console.log('\nthe ceiling, on the picture button');
+await db.from('settings').upsert({ user_id: userId, campaign_spend_ceiling: 0.01 });
+const { data: cIdea } = await db.from('ad_ideas').insert(seed(3, {
+  persona_id: persona3,
+  kie_model: 'google/nano-banana', kie_prompt: SCENE, generated_image_prompt: SCENE,
+})).select('id').single();
+const beforeC = submits.length;
+const rC = await api(`/api/campaigns/${campaign.id}/ideas/${cIdea.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+});
+const bC = await rC.json();
+check('refused', rC.status === 409, `${rC.status}`);
+check('and said why', /ceiling/i.test(bC.error ?? ''), (bC.error ?? '').slice(0, 80));
+check('nothing was submitted', submits.length === beforeC, `${submits.length - beforeC} extra`);
+const { data: cRow } = await db.from('ad_ideas').select('status').eq('id', cIdea.id).single();
+check('the row is back where it was', cRow.status === 'draft', cRow.status);
+await db.from('settings').upsert({ user_id: userId, campaign_spend_ceiling: 150 });
+
+// ── 13. a row that already has one of their photographs ────────────
+console.log('\nthe picture button on a row that does not need it');
+const rNo = await api(`/api/campaigns/${campaign.id}/ideas/${withPhoto.id}`, {
+  method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+});
+const bNo = await rNo.json();
+check('refused rather than drawing over their photograph', rNo.status === 409, `${rNo.status}`);
+check('and it reads as an instruction', /photograph/.test(bNo.error ?? ''),
+  (bNo.error ?? '').slice(0, 90));
+
 // ── clean up. Every row here is throwaway. ─────────────────────────
 await db.from('campaigns').delete().eq('id', campaign.id);
 await db.from('settings').delete().eq('user_id', userId);
