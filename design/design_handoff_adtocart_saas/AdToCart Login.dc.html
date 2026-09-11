@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="icon" href="assets/adtocart-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#fff;font-family:Manrope,system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#06162E}
+a{color:#087DE8;text-decoration:none}a:hover{color:#06162E}
+input,button{font-family:inherit}input::placeholder{color:#9AA4B2}button{cursor:pointer}
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr)">
+
+  <div style="position:relative;overflow:hidden;background:#06162E;color:#fff;padding:44px;display:flex;flex-direction:column;justify-content:space-between;gap:40px">
+    <div style="position:absolute;inset:0;background:radial-gradient(700px 380px at 20% 12%,rgba(8,125,232,.35),transparent 62%),radial-gradient(620px 420px at 88% 88%,rgba(8,199,178,.28),transparent 60%);pointer-events:none"></div>
+    <a href="AdToCart Landing.dc.html" style="position:relative;display:flex;align-items:center;gap:12px;width:max-content"><span style="width:48px;height:48px;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1px rgba(255,255,255,.18),0 0 32px rgba(8,199,178,.45)"><img src="assets/adtocart-icon.png" alt="" style="height:36px;width:auto;display:block"></img></span><span style="font-size:26px;font-weight:800;letter-spacing:-.03em;color:#fff">adtocart<span style="color:#8B949E">.cc</span></span></a>
+    <div style="position:relative;display:flex;flex-direction:column;gap:22px;max-width:460px">
+      <h1 style="margin:0;font-size:clamp(30px,3.2vw,44px);line-height:1.06;font-weight:800;letter-spacing:-.04em;text-wrap:pretty">Your customers are unique.<br><span style="background:linear-gradient(90deg,#087DE8,#079FD5,#08C7B2);-webkit-background-clip:text;background-clip:text;color:transparent">Why aren't your ads?</span></h1>
+      <p style="margin:0;font-size:16px;line-height:1.6;color:#A9B6C4">One product page in. Twenty buyers, twenty landing pages and sixty ads out — each written for a different reason somebody would buy.</p>
+    </div>
+    <div style="position:relative;display:flex;flex-direction:column;gap:10px;border-top:1px solid rgba(255,255,255,.16);padding-top:20px">
+      <sc-for list="{{ marks }}" as="m" hint-placeholder-count="3">
+        <div style="display:flex;align-items:center;gap:12px;font-size:14px;color:#C3CDD9"><span style="width:18px;height:18px;border-radius:50%;background:rgba(8,199,178,.18);color:#08C7B2;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0">✓</span>{{ m.label }}</div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:center;padding:44px">
+    <div style="width:100%;max-width:400px;display:flex;flex-direction:column;gap:20px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <h2 style="margin:0;font-size:32px;font-weight:800;letter-spacing:-.035em">{{ heading }}</h2>
+        <p style="margin:0;font-size:15px;line-height:1.55;color:#5B6672">{{ sub }}</p>
+      </div>
+
+      <div style="display:flex;background:#F1F4F7;border-radius:999px;padding:4px">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="2">
+          <button onClick="{{ t.pick }}" style="flex:1;border:0;border-radius:999px;padding:10px 14px;font-size:14px;font-weight:700;background:{{ t.bg }};color:{{ t.fg }};box-shadow:{{ t.shadow }};transition:all .2s">{{ t.label }}</button>
+        </sc-for>
+      </div>
+
+      <button onClick="{{ google }}" style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;border:1.5px solid #DDE3EA;border-radius:12px;padding:13px;font-size:15px;font-weight:700;color:#06162E" style-hover="border-color:#06162E">
+        <span style="font-size:16px;font-weight:800;color:#087DE8">G</span>{{ googleLabel }}
+      </button>
+
+      <div style="display:flex;align-items:center;gap:12px;color:#9AA4B2;font-size:12px;font-weight:600"><span style="flex:1;height:1px;background:#E7EBF0"></span>or<span style="flex:1;height:1px;background:#E7EBF0"></span></div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label style="font-size:13px;font-weight:700">Work email</label>
+        <input value="{{ email }}" onChange="{{ onEmail }}" onKeyDown="{{ onKey }}" placeholder="you@yourshop.com" style="width:100%;box-sizing:border-box;border:1.5px solid {{ emailBorder }};border-radius:12px;outline:0;padding:14px 16px;font-size:15px;font-weight:500;color:#06162E;transition:border-color .2s" style-focus="border-color:#087DE8"></input>
+      </div>
+
+      <sc-if value="{{ showPassword }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between"><label style="font-size:13px;font-weight:700">Password</label><a href="#" style="font-size:12px;font-weight:700">Forgot it?</a></div>
+        <input type="password" value="{{ password }}" onChange="{{ onPassword }}" onKeyDown="{{ onKey }}" placeholder="••••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid #DDE3EA;border-radius:12px;outline:0;padding:14px 16px;font-size:15px;color:#06162E" style-focus="border-color:#087DE8"></input>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+      <div style="font-size:13px;line-height:1.5;color:#C2410C;background:#FDF3EC;border:1px solid #F6D6BE;border-radius:10px;padding:11px 14px">{{ errorText }}</div>
+      </sc-if>
+
+      <button onClick="{{ submit }}" style="width:100%;background:linear-gradient(90deg,#087DE8,#079FD5,#08C7B2);color:#fff;border:0;border-radius:12px;padding:16px;font-size:15px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 12px 26px -14px rgba(8,125,232,.9)" style-hover="filter:brightness(1.06)">{{ submitLabel }} <span>→</span></button>
+
+      <sc-if value="{{ sent }}" hint-placeholder-val="{{ false }}">
+      <div style="font-size:14px;line-height:1.55;color:#06162E;background:#F0FBF9;border:1px solid #BDEDE6;border-radius:12px;padding:14px 16px">Check <strong>{{ email }}</strong> — there's a sign-in link waiting. It expires in fifteen minutes.</div>
+      </sc-if>
+
+      <div style="font-size:13px;line-height:1.6;color:#8B949E">{{ footnote }} <a href="#" onClick="{{ toggle }}" style="font-weight:700">{{ footnoteAction }}</a></div>
+      <div style="font-size:12px;line-height:1.6;color:#A8B1BC;border-top:1px solid #E7EBF0;padding-top:14px">Joining is free. Plans and credits are explained once you're in.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:760}}">
+class Component extends DCLogic {
+  state = { mode: 'in', email: '', password: '', error: false, sent: false };
+  renderVals() {
+    const { mode, email, password, error, sent } = this.state;
+    const isIn = mode === 'in';
+    const tab = (m, label) => ({ label, bg: mode === m ? '#fff' : 'transparent', fg: mode === m ? '#06162E' : '#5B6672',
+      shadow: mode === m ? '0 1px 3px rgba(6,22,46,.14)' : 'none',
+      pick: () => this.setState({ mode: m, error: false, sent: false }) });
+    const submit = () => {
+      if (!/.+@.+\..+/.test(email)) { this.setState({ error: true, sent: false }); return; }
+      if (isIn) { window.location.href = 'AdToCart Wizard.dc.html'; return; }
+      this.setState({ error: false, sent: true });
+    };
+    return {
+      email, password, error, sent,
+      heading: isIn ? 'Welcome back' : 'Start your first campaign',
+      sub: isIn ? 'Pick up where your campaigns left off.' : 'One product page is all you need to begin. No card, no Meta account.',
+      tabs: [tab('in', 'Log in'), tab('up', 'Create account')],
+      googleLabel: isIn ? 'Continue with Google' : 'Sign up with Google',
+      submitLabel: isIn ? 'Log in' : 'Create my account',
+      showPassword: isIn,
+      emailBorder: error ? '#F97316' : '#DDE3EA',
+      errorText: 'That does not look like an email address.',
+      footnote: isIn ? 'No account yet?' : 'Already have one?',
+      footnoteAction: isIn ? 'Create one' : 'Log in',
+      toggle: e => { e.preventDefault(); this.setState({ mode: isIn ? 'up' : 'in', error: false, sent: false }); },
+      onEmail: e => this.setState({ email: e.target.value, error: false }),
+      onPassword: e => this.setState({ password: e.target.value }),
+      onKey: e => { if (e.key === 'Enter') submit(); },
+      submit,
+      google: () => { window.location.href = 'AdToCart Wizard.dc.html'; },
+      marks: [
+        { label: 'Twenty buyer profiles that do not overlap' },
+        { label: "Ad shapes read from Meta's live ad library" },
+        { label: 'Nothing generates until you press a button' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="icon" href="assets/adtocart-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#e9edf2;font-family:Manrope,system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#06162E}
+a{color:#087DE8}a:hover{color:#06162E}
+input,textarea,button{font-family:inherit}input::placeholder,textarea::placeholder{color:#9AA4B2}
+button{cursor:pointer}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+@keyframes blink{50%{opacity:0}}
+</style>
+</helmet>
+<section style="padding:48px;display:flex;flex-direction:column;gap:18px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:20px;font-weight:700">Turn 2 · adtocart.cc campaign wizard</span><span style="font-size:14px;color:#5B6672">Built on the real flow in the repo. Click through: pick a kind of sale, paste any link, Build, approve the main page.</span></div>
+<div id="2a" style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">
+<div style="display:flex;align-items:center;gap:10px"><a href="#2a" style="font-size:12px;font-weight:700;background:#06162E;color:#fff;padding:3px 8px;border-radius:6px;text-decoration:none">2a</a><span style="font-size:13px;color:#5B6672">Five questions → build → approval gate → 60 ad ideas</span></div>
+
+<div data-screen-label="2a adtocart wizard" style="width:1240px;height:880px;background:#fff;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 60px -30px rgba(6,22,46,.35);position:relative">
+  <div style="position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#087DE8,#079FD5,#08C7B2);transform-origin:left;transform:scaleX({{ barScale }});transition:transform .5s cubic-bezier(.2,.7,.2,1)"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:22px 44px 0">
+    <a href="AdToCart Landing.dc.html" style="display:flex;align-items:center;gap:10px"><img src="assets/adtocart-icon.png" alt="" style="height:38px;width:auto;display:block"></img><span style="font-size:22px;font-weight:800;letter-spacing:-.03em;color:#06162E">adtocart<span style="color:#8B949E">.cc</span></span></a>
+    <div style="display:flex;align-items:center;gap:18px">
+      <sc-if value="{{ inPipeline }}" hint-placeholder-val="{{ false }}"><div style="font-size:13px;color:#5B6672"><span style="font-weight:700;color:#06162E">{{ campaignTitle }}</span> · {{ statusLabel }}</div></sc-if>
+      <button onClick="{{ restart }}" style="background:none;border:1px solid #DDE3EA;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:600;color:#5B6672" style-hover="border-color:#06162E;color:#06162E">Start over</button>
+    </div>
+  </div>
+
+  <sc-if value="{{ inWizard }}" hint-placeholder-val="{{ true }}">
+  <div style="display:flex;gap:10px;padding:34px 44px 0">
+    <sc-for list="{{ rail }}" as="s" hint-placeholder-count="5">
+      <div style="flex:1;display:flex;flex-direction:column;gap:7px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.14em;color:{{ s.color }};transition:color .4s"><span>{{ s.num }}</span><span style="letter-spacing:.04em;font-weight:600;text-transform:uppercase">{{ s.label }}</span></div>
+        <div style="height:4px;border-radius:2px;background:{{ s.bar }};transition:background .4s"></div>
+      </div>
+    </sc-for>
+  </div>
+  </sc-if>
+
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;padding:0 44px 40px;min-height:0;opacity:{{ fx.op }};transform:translateY({{ fx.ty }}px);transition:opacity .22s ease,transform .22s ease">
+
+    <!-- 1. What are you selling -->
+    <sc-if value="{{ is0 }}" hint-placeholder-val="{{ true }}">
+    <div style="width:720px;display:flex;flex-direction:column;gap:22px;margin-top:64px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Step 1 of 5</div>
+      <h1 style="margin:0;font-size:44px;line-height:1.05;font-weight:800;letter-spacing:-.035em">What are you selling?</h1>
+      <p style="margin:0;font-size:16px;line-height:1.6;color:#5B6672;max-width:600px">This is the only answer that changes the rest of the app: where we read the facts from, how many pages get built, and how the page asks for the sale.</p>
+      <div style="display:grid;gap:12px;margin-top:8px">
+        <sc-for list="{{ kinds }}" as="k" hint-placeholder-count="3">
+          <button onClick="{{ k.pick }}" style="text-align:left;border:2px solid {{ k.border }};background:{{ k.bg }};color:{{ k.fg }};border-radius:14px;padding:18px 22px;display:flex;align-items:center;gap:18px;transition:all .25s" style-hover="border-color:#087DE8">
+            <span style="width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:{{ k.iconBg }};color:{{ k.iconFg }};font-size:20px;font-weight:800;flex-shrink:0;transition:all .25s">{{ k.glyph }}</span>
+            <span style="display:flex;flex-direction:column;gap:3px"><span style="font-size:17px;font-weight:700;letter-spacing:-.01em">{{ k.label }}</span><span style="font-size:14px;line-height:1.5;color:{{ k.sub }}">{{ k.body }}</span></span>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:6px"><button onClick="{{ next }}" style="background:#06162E;color:#fff;border:0;border-radius:999px;padding:15px 26px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px" style-hover="background:#087DE8">Next <span>→</span></button></div>
+    </div>
+    </sc-if>
+
+    <!-- 2. Tell us about it -->
+    <sc-if value="{{ is1 }}" hint-placeholder-val="{{ false }}">
+    <div style="width:720px;display:flex;flex-direction:column;gap:22px;margin-top:56px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Step 2 of 5</div>
+      <h1 style="margin:0;font-size:44px;line-height:1.05;font-weight:800;letter-spacing:-.035em">Tell us about it</h1>
+      <p style="margin:0;font-size:16px;line-height:1.6;color:#5B6672;max-width:620px">{{ sourceIntro }}</p>
+      <div style="display:flex;gap:8px">
+        <sc-for list="{{ modes }}" as="m" hint-placeholder-count="2">
+          <button onClick="{{ m.pick }}" style="border:2px solid {{ m.border }};background:{{ m.bg }};color:{{ m.fg }};border-radius:999px;padding:9px 16px;font-size:13px;font-weight:700;transition:all .2s" style-hover="border-color:#06162E">{{ m.label }}</button>
+        </sc-for>
+      </div>
+      <sc-if value="{{ modeUrl }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label style="font-size:14px;font-weight:700">{{ urlLabel }}</label>
+        <input value="{{ draft.source_url }}" onChange="{{ onUrl }}" onKeyDown="{{ onKey }}" placeholder="{{ urlPlaceholder }}" style="width:100%;box-sizing:border-box;border:2px solid {{ urlBorder }};border-radius:12px;outline:0;padding:16px 18px;font-size:18px;font-weight:500;color:#06162E;transition:border-color .2s" style-focus="border-color:#087DE8"></input>
+        <div style="font-size:13px;line-height:1.5;color:{{ urlHelpColor }}">{{ urlHelp }}</div>
+      </div>
+      </sc-if>
+      <sc-if value="{{ modeText }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label style="font-size:14px;font-weight:700">{{ textLabel }}</label>
+        <textarea value="{{ draft.raw_input_text }}" onChange="{{ onText }}" placeholder="{{ textPlaceholder }}" style="width:100%;box-sizing:border-box;min-height:130px;resize:vertical;border:2px solid {{ textBorder }};border-radius:12px;outline:0;padding:16px 18px;font-size:16px;line-height:1.5;color:#06162E" style-focus="border-color:#087DE8"></textarea>
+        <div style="font-size:13px;line-height:1.5;color:{{ textHelpColor }}">{{ textHelp }}</div>
+      </div>
+      </sc-if>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label style="font-size:14px;font-weight:700">{{ photosLabel }}</label>
+          <div style="border:2px dashed #DDE3EA;border-radius:12px;padding:18px;display:flex;align-items:center;gap:12px;color:#5B6672;font-size:13px;line-height:1.5"><span style="width:34px;height:34px;border-radius:10px;background:#EEF6FE;color:#087DE8;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;flex-shrink:0">+</span>Drop photos here, or click to choose</div>
+          <div style="font-size:13px;line-height:1.5;color:#8B949E">{{ photosHelp }}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label style="font-size:14px;font-weight:700">Campaign name</label>
+          <input value="{{ draft.title }}" onChange="{{ onTitle }}" placeholder="{{ titlePlaceholder }}" style="width:100%;box-sizing:border-box;border:2px solid #DDE3EA;border-radius:12px;outline:0;padding:14px 16px;font-size:15px;font-weight:500;color:#06162E" style-focus="border-color:#087DE8"></input>
+          <div style="font-size:13px;line-height:1.5;color:#8B949E">Just for you, so you can find this again. Nobody else sees it.</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button onClick="{{ back }}" style="background:none;border:0;padding:12px 6px;font-size:15px;font-weight:600;color:#5B6672" style-hover="color:#06162E">Back</button>
+        <button onClick="{{ next }}" style="background:#06162E;color:#fff;border:0;border-radius:999px;padding:15px 26px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px" style-hover="background:#087DE8">Next <span>→</span></button>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 3. How do people buy it -->
+    <sc-if value="{{ is2 }}" hint-placeholder-val="{{ false }}">
+    <div style="width:720px;display:flex;flex-direction:column;gap:22px;margin-top:64px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Step 3 of 5</div>
+      <h1 style="margin:0;font-size:44px;line-height:1.05;font-weight:800;letter-spacing:-.035em">How do people buy it?</h1>
+      <p style="margin:0;font-size:16px;line-height:1.6;color:#5B6672;max-width:620px">{{ buyIntro }}</p>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label style="font-size:14px;font-weight:700">{{ buyLabel }}</label>
+        <input value="{{ draft.checkout_url }}" onChange="{{ onCheckout }}" placeholder="{{ buyPlaceholder }}" style="width:100%;box-sizing:border-box;border:2px solid #DDE3EA;border-radius:12px;outline:0;padding:16px 18px;font-size:18px;font-weight:500;color:#06162E" style-focus="border-color:#087DE8"></input>
+        <div style="font-size:13px;line-height:1.5;color:#8B949E">{{ buyHelp }}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label style="font-size:14px;font-weight:700">What is the current offer?</label>
+        <input value="{{ draft.current_offer }}" onChange="{{ onOffer }}" placeholder="{{ offerPlaceholder }}" style="width:100%;box-sizing:border-box;border:2px solid #DDE3EA;border-radius:12px;outline:0;padding:16px 18px;font-size:18px;font-weight:500;color:#06162E" style-focus="border-color:#087DE8"></input>
+        <div style="font-size:13px;line-height:1.5;color:#8B949E">Written exactly as a customer should read it. It goes in the bar across the top of every page. Leave it empty if there is no offer on right now.</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button onClick="{{ back }}" style="background:none;border:0;padding:12px 6px;font-size:15px;font-weight:600;color:#5B6672" style-hover="color:#06162E">Back</button>
+        <button onClick="{{ next }}" style="background:#06162E;color:#fff;border:0;border-radius:999px;padding:15px 26px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px" style-hover="background:#087DE8">Next <span>→</span></button>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 4. Audience -->
+    <sc-if value="{{ is3 }}" hint-placeholder-val="{{ false }}">
+    <div style="width:720px;display:flex;flex-direction:column;gap:22px;margin-top:64px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Step 4 of 5</div>
+      <h1 style="margin:0;font-size:44px;line-height:1.05;font-weight:800;letter-spacing:-.035em">Who are we advertising to?</h1>
+      <p style="margin:0;font-size:16px;line-height:1.6;color:#5B6672;max-width:620px">Two settings, and neither one changes the pages. They decide which country's ads we study, and what mix of ads we later suggest.</p>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <label style="font-size:14px;font-weight:700">Which country are you selling into?</label>
+        <div style="display:flex;gap:8px">
+          <sc-for list="{{ regions }}" as="r" hint-placeholder-count="4">
+            <button onClick="{{ r.pick }}" style="border:2px solid {{ r.border }};background:{{ r.bg }};color:{{ r.fg }};border-radius:999px;padding:10px 18px;font-size:14px;font-weight:700;transition:all .2s" style-hover="border-color:#06162E">{{ r.label }}</button>
+          </sc-for>
+        </div>
+        <div style="font-size:13px;color:#8B949E">Picking all three takes longer.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <label style="font-size:14px;font-weight:700">For each buyer, how many ads should be video?</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <sc-for list="{{ splits }}" as="v" hint-placeholder-count="2">
+            <button onClick="{{ v.pick }}" style="text-align:left;border:2px solid {{ v.border }};background:{{ v.bg }};color:{{ v.fg }};border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:6px;transition:all .25s" style-hover="border-color:#087DE8"><span style="font-size:16px;font-weight:700">{{ v.label }}</span><span style="font-size:13px;line-height:1.5;color:{{ v.sub }}">{{ v.body }}</span></button>
+          </sc-for>
+        </div>
+        <div style="font-size:13px;color:#8B949E">You get three ad ideas per buyer either way. Videos cost roughly 150 times what a picture costs to make, so start with one.</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button onClick="{{ back }}" style="background:none;border:0;padding:12px 6px;font-size:15px;font-weight:600;color:#5B6672" style-hover="color:#06162E">Back</button>
+        <button onClick="{{ next }}" style="background:#06162E;color:#fff;border:0;border-radius:999px;padding:15px 26px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px" style-hover="background:#087DE8">Next <span>→</span></button>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 5. Check it over -->
+    <sc-if value="{{ is4 }}" hint-placeholder-val="{{ false }}">
+    <div style="width:720px;display:flex;flex-direction:column;gap:22px;margin-top:56px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Step 5 of 5</div>
+      <h1 style="margin:0;font-size:44px;line-height:1.05;font-weight:800;letter-spacing:-.035em">Check it over</h1>
+      <div style="border-top:1px solid #DDE3EA">
+        <sc-for list="{{ review }}" as="row" hint-placeholder-count="7">
+          <div style="display:flex;align-items:baseline;gap:16px;padding:13px 0;border-bottom:1px solid #DDE3EA">
+            <div style="width:190px;flex-shrink:0;font-size:13px;font-weight:700;color:#5B6672">{{ row.label }}</div>
+            <div style="flex:1;font-size:15px;color:#06162E;word-break:break-word">{{ row.value }}</div>
+            <button onClick="{{ row.edit }}" style="background:none;border:0;padding:0;font-size:13px;font-weight:700;color:#087DE8;text-decoration:underline;text-underline-offset:3px">Change</button>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;gap:14px;align-items:flex-start;background:#F0FBF9;border:1px solid #BDEDE6;border-radius:14px;padding:16px 18px">
+        <span style="width:26px;height:26px;border-radius:50%;background:#08C7B2;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0">✓</span>
+        <div style="font-size:14px;line-height:1.55;color:#06162E"><strong>This does not cost anything.</strong> Pressing the button reads what you gave us, invents {{ personaTarget }} different kinds of buyer, and puts {{ personaTarget }} landing pages live. No ads are made and nothing is charged. That only happens much later, when you approve individual ad ideas one at a time.</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button onClick="{{ back }}" style="background:none;border:0;padding:12px 6px;font-size:15px;font-weight:600;color:#5B6672" style-hover="color:#06162E">Back</button>
+        <button onClick="{{ build }}" style="background:linear-gradient(90deg,#087DE8,#079FD5,#08C7B2);color:#fff;border:0;border-radius:999px;padding:17px 30px;font-size:16px;font-weight:800;display:flex;align-items:center;gap:10px;box-shadow:0 10px 24px -10px rgba(8,125,232,.7)" style-hover="filter:brightness(1.06)">Build my campaign <span>→</span></button>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 6. Building (progress + gate) -->
+    <sc-if value="{{ isBuilding }}" hint-placeholder-val="{{ false }}">
+    <div style="width:1152px;display:grid;grid-template-columns:480px 1fr;gap:56px;margin-top:40px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:22px">
+        <h1 style="margin:0;font-size:38px;line-height:1.08;font-weight:800;letter-spacing:-.035em">{{ buildHeadline }}</h1>
+        <div style="display:flex;flex-direction:column">
+          <sc-for list="{{ stages }}" as="s" hint-placeholder-count="7">
+            <div style="display:flex;gap:16px;padding:13px 0;border-top:1px solid #E7EBF0;opacity:{{ s.op }};transition:opacity .4s">
+              <span style="width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:{{ s.dotBg }};border:2px solid {{ s.dotBorder }};color:#fff;font-size:12px;font-weight:800;box-sizing:border-box;transition:all .4s"><sc-if value="{{ s.done }}" hint-placeholder-val="{{ false }}">✓</sc-if><sc-if value="{{ s.active }}" hint-placeholder-val="{{ false }}"><span style="width:10px;height:10px;border-radius:50%;border:2px solid #087DE8;border-top-color:transparent;animation:spin .8s linear infinite"></span></sc-if><sc-if value="{{ s.waiting }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#fff;animation:pulse 1.2s ease-in-out infinite"></span></sc-if></span>
+              <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+                <div style="display:flex;justify-content:space-between;gap:12px;font-size:15px;font-weight:700;color:{{ s.color }}"><span>{{ s.title }}</span><span style="font-size:12px;font-weight:700;color:#087DE8;white-space:nowrap">{{ s.count }}</span></div>
+                <sc-if value="{{ s.showDetail }}" hint-placeholder-val="{{ false }}"><div style="font-size:13px;line-height:1.5;color:#5B6672">{{ s.detail }}</div></sc-if>
+              </div>
+            </div>
+          </sc-for>
+          <div style="height:4px;border-radius:2px;background:#E7EBF0;margin-top:6px;overflow:hidden"><div style="height:100%;width:{{ buildPct }}%;background:linear-gradient(90deg,#087DE8,#079FD5,#08C7B2);transition:width .3s linear"></div></div>
+        </div>
+      </div>
+
+      <div style="min-height:560px;display:flex;flex-direction:column">
+        <sc-if value="{{ atGate }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end">
+            <div><div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Your approval needed</div><div style="font-size:22px;font-weight:800;letter-spacing:-.02em;margin-top:4px">The main page, written for the broadest buyer</div></div>
+            <div style="font-size:13px;color:#5B6672;text-align:right;max-width:230px;line-height:1.5">Seven of its ten reasons go onto all {{ personaTarget }} pages unchanged.</div>
+          </div>
+          <div style="border:1px solid #DDE3EA;border-radius:16px;overflow:hidden;box-shadow:0 20px 40px -30px rgba(6,22,46,.4)">
+            <div style="background:#06162E;color:#fff;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:9px 20px;text-align:center">{{ offerBar }}</div>
+            <div style="padding:26px 28px;display:flex;flex-direction:column;gap:18px">
+              <div style="display:grid;grid-template-columns:1fr 200px;gap:22px;align-items:start">
+                <div style="display:flex;flex-direction:column;gap:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#8B949E">{{ host }}</div><div style="font-size:28px;line-height:1.12;font-weight:800;letter-spacing:-.03em;text-wrap:pretty">{{ heroHeadline }}</div><div style="font-size:14px;line-height:1.55;color:#5B6672">{{ heroSub }}</div></div>
+                <div style="aspect-ratio:1;border-radius:12px;background:#EEF2F6;display:flex;align-items:center;justify-content:center;font-size:12px;color:#8B949E;text-align:center;padding:12px">Photo from your product page</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#8B949E">Ten reasons to buy</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 22px">
+                  <sc-for list="{{ reasons }}" as="r" hint-placeholder-count="6">
+                    <div style="display:flex;gap:10px;font-size:14px;line-height:1.45"><span style="color:#087DE8;font-weight:800;font-variant-numeric:tabular-nums">{{ r.n }}</span><span style="color:{{ r.color }}">{{ r.text }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display:flex;gap:14px;background:#F6F8FA;border-radius:12px;padding:14px 16px;align-items:flex-start"><span style="font-size:26px;line-height:1;color:#08C7B2;font-weight:800">“</span><div style="font-size:14px;line-height:1.5;color:#06162E">{{ testimonial }}<span style="display:block;margin-top:4px;font-size:12px;color:#8B949E">Verified review, pulled from the product page</span></div></div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <button onClick="{{ approve }}" style="background:#06162E;color:#fff;border:0;border-radius:999px;padding:16px 28px;font-size:15px;font-weight:800;display:flex;align-items:center;gap:10px" style-hover="background:#087DE8">Approve the main page <span>→</span></button>
+            <button style="background:none;border:0;padding:12px 6px;font-size:14px;font-weight:700;color:#5B6672;text-decoration:underline;text-underline-offset:3px">Edit the words first</button>
+            <div style="margin-left:auto;font-size:13px;color:#5B6672">Nothing else runs until you approve.</div>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ showLive }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end">
+            <div><div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">{{ liveEyebrow }}</div><div style="font-size:22px;font-weight:800;letter-spacing:-.02em;margin-top:4px">{{ liveTitle }}</div></div>
+            <div style="font-size:13px;color:#5B6672">{{ liveNote }}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+            <sc-for list="{{ buyers }}" as="b" hint-placeholder-count="8">
+              <div style="border:1px solid #DDE3EA;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;opacity:{{ b.op }};transform:translateY({{ b.ty }}px) scale({{ b.sc }});transition:all .5s cubic-bezier(.2,.7,.2,1);background:#fff">
+                <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#087DE8">{{ b.n }}</span><span style="font-size:10px;font-weight:700;color:{{ b.tagColor }};background:{{ b.tagBg }};padding:2px 7px;border-radius:999px">{{ b.tag }}</span></div>
+                <div style="font-size:14px;font-weight:700;line-height:1.3">{{ b.name }}</div>
+                <div style="font-size:12px;line-height:1.45;color:#5B6672">{{ b.pain }}</div>
+                <div style="font-size:11px;color:#8B949E;margin-top:2px;font-family:ui-monospace,monospace">/p/{{ slug }}/{{ b.slug }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ moreBuyers }}" hint-placeholder-val="{{ false }}"><div style="font-size:13px;color:#5B6672">{{ moreBuyersText }}</div></sc-if>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 7. Ad ideas table -->
+    <sc-if value="{{ isTable }}" hint-placeholder-val="{{ false }}">
+    <div style="width:1152px;display:flex;flex-direction:column;gap:20px;margin-top:36px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#087DE8">Your ad ideas are waiting for you</div>
+          <h1 style="margin:0;font-size:38px;line-height:1.08;font-weight:800;letter-spacing:-.035em">{{ ideaCountText }} ad ideas across {{ personaTarget }} buyers.</h1>
+          <div style="font-size:15px;color:#5B6672">Every field is editable. Nothing is made or charged until you approve a row. A picture is $0.02; a 10‑second video is $1.24.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <div style="font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#8B949E">Spent · ceiling $150</div>
+          <div style="font-size:28px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums">${{ spent }}</div>
+          <div style="width:180px;height:4px;border-radius:2px;background:#E7EBF0"><div style="height:100%;width:{{ spentPct }}%;background:#08C7B2;border-radius:2px;transition:width .4s"></div></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:150px 110px 1fr 200px 108px 150px 96px;gap:14px;padding:0 16px 10px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#8B949E;border-bottom:1px solid #DDE3EA">
+        <span>Buyer</span><span>Format</span><span>Primary text</span><span>Headline</span><span>Button</span><span>Picture</span><span></span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <sc-for list="{{ ideas }}" as="i" hint-placeholder-count="6">
+          <div style="display:grid;grid-template-columns:150px 110px 1fr 200px 108px 150px 96px;gap:14px;align-items:center;padding:12px 16px;border-radius:12px;background:{{ i.bg }};border:1px solid {{ i.border }};opacity:{{ i.op }};transform:translateX({{ i.tx }}px);transition:all .5s cubic-bezier(.2,.7,.2,1)">
+            <div style="min-width:0"><div style="font-size:13px;font-weight:700;line-height:1.3">{{ i.buyer }}</div><div style="font-size:11px;color:#8B949E">→ their page</div></div>
+            <div><span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;background:{{ i.fmtBg }};color:{{ i.fmtFg }}">{{ i.format }}</span></div>
+            <div style="font-size:13px;line-height:1.45;color:#06162E;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ i.primary }}</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.35;min-width:0">{{ i.headline }}</div>
+            <div style="font-size:12px;font-weight:700;color:#5B6672;border:1px solid #DDE3EA;border-radius:6px;padding:4px 8px;text-align:center;white-space:nowrap">{{ i.cta }}</div>
+            <div><sc-if value="{{ i.hasPicture }}" hint-placeholder-val="{{ false }}"><div style="height:44px;border-radius:8px;background:linear-gradient(135deg,#087DE8,#08C7B2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff">Drawn · $0.02</div></sc-if><sc-if value="{{ i.noPicture }}" hint-placeholder-val="{{ true }}"><button onClick="{{ i.make }}" style="width:100%;background:#fff;border:1px solid #DDE3EA;border-radius:8px;padding:9px 8px;font-size:12px;font-weight:700;color:#06162E" style-hover="border-color:#087DE8;color:#087DE8">Make it · {{ i.price }}</button></sc-if></div>
+            <div><sc-if value="{{ i.approved }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;font-weight:800;color:#08C7B2;text-align:center">Approved ✓</div></sc-if><sc-if value="{{ i.notApproved }}" hint-placeholder-val="{{ true }}"><button onClick="{{ i.approve }}" style="width:100%;background:#06162E;color:#fff;border:0;border-radius:8px;padding:10px 8px;font-size:12px;font-weight:800" style-hover="background:#087DE8">Approve</button></sc-if></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#5B6672"><span>Showing 6 of {{ ideaCountText }}. Approving a row submits it; you paste the result into Ads Manager.</span><button style="background:none;border:1px solid #DDE3EA;border-radius:999px;padding:9px 16px;font-size:13px;font-weight:700;color:#06162E" style-hover="border-color:#06162E">Show all buyers</button></div>
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;speed&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;slow&quot;,&quot;normal&quot;,&quot;fast&quot;],&quot;default&quot;:&quot;normal&quot;,&quot;tsType&quot;:&quot;'slow'|'normal'|'fast'&quot;,&quot;section&quot;:&quot;Wizard&quot;}}">
+const KINDS = [
+  { value: 'ecom', label: 'Physical product', glyph: '▢', blurb: 'Something you ship, sold from an online shop.', target: 20, cta: 'checkout', modes: ['url', 'text'] },
+  { value: 'ebook', label: 'Digital ebook', glyph: '▤', blurb: 'A PDF people buy and download. Upload the book itself, or point at its sales page.', target: 20, cta: 'checkout', modes: ['pdf', 'url'] },
+  { value: 'vehicle', label: 'Motor vehicle or boat', glyph: '◉', blurb: 'One specific car, ute, bike, caravan or vessel for sale. Buyers ring you.', target: 5, cta: 'contact', modes: ['url', 'text'] },
+];
+const MODE_LABEL = {
+  ecom: { url: 'I have a link', text: 'I will type it out' },
+  ebook: { pdf: 'Upload the PDF', url: 'Use its sales page' },
+  vehicle: { url: 'I have the listing link', text: 'I will type it out' },
+};
+const REGIONS = [['AU', 'Australia'], ['US', 'United States'], ['GB', 'United Kingdom'], ['ALL', 'All three']];
+const RAIL = ['Selling', 'About it', 'Buying', 'Audience', 'Check'];
+const STATUS = { read: 'Reading your product page', brief: 'Summarising what you sell', base: 'Waiting for you to approve the main page', images: 'Choosing photos for your page', pages: 'Writing your landing pages', scan: "Reading Meta's ad library on your Mac", ideas: 'Writing your ad ideas', ready: 'Your ad ideas are waiting for you' };
+const BUYERS = [
+  ['The commuter', 'Sweaty feet by 9am on a 40-minute walk to the office.', 'Wants'],
+  ['The nervous first-timer', "Has never spent $160 on a shoe and expects to regret it.", 'Fears'],
+  ['The gift buyer', "Doesn't know their size, needs returns to be painless.", 'Needs'],
+  ['The upgrader', 'Third pair of the same brand; bored, not unhappy.', 'Wants'],
+  ['The burnt-before', 'Bought "sustainable" shoes once that fell apart in a month.', 'Fears'],
+  ['The barefoot convert', 'Wants a wide toe box and will read the specs.', 'Needs'],
+  ['The traveller', 'One pair for the plane, the meeting and the beach.', 'Wants'],
+  ['The wool sceptic', 'Cannot picture wool on a foot in summer.', 'Fears'],
+];
+const IDEAS = [
+  ['The commuter', 'Static', "Forty minutes each way, and your feet arrive drier than they left. Merino wicks; foam doesn't.", 'Dry feet at 9am', 'Shop Now', 0.02],
+  ['The commuter', 'Video', 'Open on a train platform at 7:52. Close on the same shoes at a 6pm drink. Nothing changed but the light.', 'One shoe, whole day', 'Learn More', 1.24],
+  ['The nervous first-timer', 'Static', "It's a lot for a shoe. That's why the first 30 days are on us — wear them anywhere, send them back if they're not it.", '30 days, any reason', 'Shop Now', 0.02],
+  ['The gift buyer', 'Static', "You don't need their size. They pick it, you pay, we ship. Exchanges are free and nobody finds out.", 'The gift that fits', 'Get Offer', 0.02],
+  ['The burnt-before', 'Video', 'A pair after 400 km, filmed close. Sole, stitching, upper. No cuts, no music.', 'Still here after 400 km', 'Learn More', 1.24],
+  ['The wool sceptic', 'Static', "Merino is what mountaineers wear in July. It's a temperature regulator, not a jumper.", 'Wool. In summer. Really.', 'Shop Now', 0.02],
+];
+const SPAN = { read: 22, brief: 30, base: 34, images: 30, pages: 110, scan: 90, extract: 26, ideas: 100 };
+const PRE = SPAN.read + SPAN.brief + SPAN.base;
+const POST = SPAN.images + SPAN.pages + SPAN.scan + SPAN.extract + SPAN.ideas;
+const ACC = '#087DE8', NAVY = '#06162E', LINE = '#DDE3EA', GREY = '#8B949E';
+
+class Component extends DCLogic {
+  state = this.init();
+  timer = null; fxTimer = null;
+  init() {
+    return { step: 0, fade: false, t: 0, approved: false, err: {},
+      draft: { product_type: 'ecom', mode: 'url', source_url: '', raw_input_text: '', title: '', checkout_url: '', current_offer: '', region: 'AU', videos: 1 },
+      pictures: {}, approvals: {} };
+  }
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.fxTimer); }
+  setDraft(k, v) { this.setState(s => ({ draft: { ...s.draft, [k]: v }, err: { ...s.err, [k]: undefined } })); }
+  kind() { return KINDS.find(k => k.value === this.state.draft.product_type); }
+  normalise(raw) {
+    const t = (raw || '').trim(); if (!t) return null;
+    try { const u = new URL(/^https?:\/\//i.test(t) ? t : 'https://' + t); return u.hostname.includes('.') ? u : null; } catch (e) { return null; }
+  }
+  titleFromUrl(raw) {
+    const u = this.normalise(raw); if (!u) return '';
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    const src = last && last.length > 2 ? last : u.hostname.replace(/^www\./, '');
+    return src.replace(/\.[a-z]{2,5}$/i, '').replace(/[-_]+/g, ' ').trim().replace(/\b\w/g, c => c.toUpperCase()).slice(0, 60);
+  }
+  go(step) {
+    clearTimeout(this.fxTimer);
+    this.setState({ fade: true });
+    this.fxTimer = setTimeout(() => this.setState({ step, fade: false }), 200);
+  }
+  validate() {
+    const d = this.state.draft, err = {};
+    if (this.state.step === 1) {
+      if (d.mode === 'url') {
+        if (!d.source_url.trim()) err.source_url = d.product_type === 'vehicle' ? 'Paste the address of the listing — the page a buyer would land on.' : 'Paste the web address of the product you want to advertise.';
+        else if (!this.normalise(d.source_url)) err.source_url = 'That does not look like a web address. It should look like https://yourshop.com/products/your-product';
+      } else if (d.mode === 'text') {
+        const n = d.raw_input_text.trim().length;
+        if (!n) err.raw_input_text = 'Describe it, or switch back to using a link.';
+        else if (n < 40) err.raw_input_text = `A bit more, please — ${n} of 40 characters so far. What it is, who it is for, and what it costs.`;
+      }
+    }
+    return err;
+  }
+  next() {
+    const err = this.validate();
+    if (Object.keys(err).length) { this.setState({ err }); return; }
+    this.go(Math.min(this.state.step + 1, 4));
+  }
+  tick(max, onDone) {
+    clearInterval(this.timer);
+    const mult = { slow: 1.8, normal: 1, fast: 0.45 }[this.props.speed ?? 'normal'] ?? 1;
+    this.timer = setInterval(() => this.setState(s => {
+      if (s.t >= max) { clearInterval(this.timer); if (onDone) setTimeout(onDone, 400); return null; }
+      return { t: s.t + 1 };
+    }), 45 * mult);
+  }
+  build() { this.setState({ t: 0, approved: false }); this.go(5); setTimeout(() => this.tick(PRE), 250); }
+  approve() { this.setState({ approved: true, t: 0 }); this.tick(POST, () => this.go(6)); }
+  restart() { clearInterval(this.timer); this.setState(this.init()); }
+
+  renderVals() {
+    const { step, draft: d, t, approved, err, fade, pictures, approvals } = this.state;
+    const kind = this.kind(), vehicle = d.product_type === 'vehicle', ebook = d.product_type === 'ebook', contact = kind.cta === 'contact';
+    const host = this.normalise(d.source_url)?.hostname.replace(/^www\./, '') || 'yourshop.com';
+    const campaignTitle = d.title.trim() || this.titleFromUrl(d.source_url) || (vehicle ? '2019 Ranger Wildtrak' : 'Tree Runner — spring');
+    const slug = campaignTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 24);
+    const sel = (on) => on ? { border: NAVY, bg: NAVY, fg: '#fff', sub: '#B7C0CC', iconBg: 'rgba(255,255,255,.12)', iconFg: '#08C7B2' } : { border: LINE, bg: '#fff', fg: NAVY, sub: '#5B6672', iconBg: '#EEF6FE', iconFg: ACC };
+    const rail = RAIL.map((label, i) => ({ label, num: '0' + (i + 1), color: i === step ? NAVY : i < step ? ACC : GREY, bar: i === step ? NAVY : i < step ? 'linear-gradient(90deg,#087DE8,#08C7B2)' : '#E7EBF0' }));
+    const kinds = KINDS.map(k => ({ ...sel(k.value === d.product_type), label: k.label, glyph: k.glyph,
+      body: `${k.blurb} ${k.target} landing pages, ending in ${k.cta === 'contact' ? 'a phone number and an enquiry form' : 'your checkout link'}.`,
+      pick: () => this.setState(s => ({ draft: { ...s.draft, product_type: k.value, mode: k.modes.includes(s.draft.mode) ? s.draft.mode : k.modes[0] } })) }));
+    const modes = kind.modes.map(m => ({ ...sel(m === d.mode), label: MODE_LABEL[d.product_type][m], pick: () => this.setDraft('mode', m) }));
+    const regions = REGIONS.map(([v, label]) => ({ ...sel(v === d.region), label, pick: () => this.setDraft('region', v) }));
+    const splits = [[1, '2 pictures + 1 video', 'Recommended. Three ideas is a test of which angle works; pictures answer that faster and for almost nothing.'], [2, '1 picture + 2 videos', 'For when you already know the angle that sells and you want more video in the market.']]
+      .map(([v, label, body]) => ({ ...sel(v === d.videos), label, body, pick: () => this.setDraft('videos', v) }));
+    const review = [
+      ['Selling', kind.label, 0], ['Campaign name', campaignTitle, 1],
+      [d.mode === 'pdf' ? 'The book' : 'Source', d.mode === 'url' ? (this.normalise(d.source_url)?.toString() || 'no link yet') : d.mode === 'pdf' ? 'the-book.pdf' : d.raw_input_text.trim().slice(0, 120), 1],
+      ['Your photos', 'none', 1],
+      contact ? ['Buyers ring', d.checkout_url.trim() || 'not set', 2] : ['Button sends people to', this.normalise(d.checkout_url)?.toString() || 'the product page', 2],
+      ['Offer shown on every page', d.current_offer.trim() || 'none', 2],
+      ['Country', REGIONS.find(r => r[0] === d.region)[1], 3],
+      ['Ads per buyer', `${3 - d.videos} picture${3 - d.videos === 1 ? '' : 's'} + ${d.videos} video${d.videos === 1 ? '' : 's'}`, 3],
+    ].map(([label, value, s]) => ({ label, value, edit: () => this.go(s) }));
+
+    // pipeline
+    const inPipeline = step >= 5;
+    const target = kind.target;
+    let cursor = 0;
+    const seg = (key, phaseT) => { const start = cursor, end = cursor + SPAN[key]; cursor = end; const s = phaseT - start; return { done: s >= SPAN[key], active: s >= 0 && s < SPAN[key], frac: Math.max(0, Math.min(1, s / SPAN[key])) }; };
+    const preT = step >= 5 ? t : -1, postT = approved ? t : -1;
+    const readS = seg('read', preT), briefS = seg('brief', preT), baseS = seg('base', preT); cursor = 0;
+    const imgS = seg('images', postT), pagesS = seg('pages', postT), scanS = seg('scan', postT), extS = seg('extract', postT), ideasS = seg('ideas', postT);
+    const atGate = step === 5 && baseS.done && !approved;
+    const pagesN = Math.round(pagesS.frac * target), searches = Math.round(scanS.frac * 6), adsRead = Math.round(scanS.frac * 312), ideasN = Math.round(ideasS.frac * target * 3);
+    const mk = (title, detail, s, count, extra) => {
+      const st = { title, detail, count: count || '', done: s.done, active: s.active, waiting: !!(extra && extra.waiting), showDetail: s.active || s.done || (extra && extra.waiting),
+        color: s.done || s.active || (extra && extra.waiting) ? NAVY : GREY, op: s.done || s.active || (extra && extra.waiting) ? 1 : .55,
+        dotBg: s.done ? ACC : extra && extra.waiting ? '#08C7B2' : '#fff', dotBorder: s.done ? ACC : s.active ? ACC : extra && extra.waiting ? '#08C7B2' : LINE };
+      if (extra && extra.waiting) { st.done = false; st.active = false; }
+      return st;
+    };
+    const stages = [
+      mk(d.mode === 'url' ? 'Reading your product page' : 'Reading what you typed', d.mode === 'url' ? 'Pulling the price, the features, the photos and the customer reviews straight off the page. Takes about a second and needs nothing running on your machine.' : 'Taking your description as the source instead of a web page.', readS, readS.done ? '14 sections · 38 reviews' : ''),
+      mk('Summarising what you sell', 'One short, factual summary: what it does, what it costs, what customers actually said about it. Everything after this is written from it.', briefS, briefS.done ? '3 gaps noted' : ''),
+      mk('Writing the main page, for you to approve', approved ? `Approved. Seven of its ten reasons appear on every one of the ${target} pages.` : atGate ? `Written and waiting. Read it on the right — seven of its ten reasons go onto all ${target} pages unchanged, so nothing else runs until you approve it.` : `One page written for the broadest buyer. It is the checkpoint: a mistake here is a mistake ${target} times.`, approved ? { done: true } : baseS, atGate ? 'Waiting for you' : '', { waiting: atGate }),
+      mk('Choosing photos from your own site', imgS.done ? '6 of your own photos are on the main page. Nothing was generated and nothing was paid for.' : 'Photos on your product page get read, described, and put against the reasons they actually show. A reason no photo genuinely illustrates keeps its empty slot.', imgS, imgS.done ? '6 placed' : ''),
+      mk(`Writing ${target} landing pages`, 'One page per kind of buyer — the nervous first-timer, the gift buyer, the upgrader — each with its own headline, its own reasons and its own pictures.', pagesS, pagesS.active || pagesS.done ? `${pagesN} of ${target}` : ''),
+      mk('Studying ads that already work', extS.done ? '7 formats found across 184 ads live between three months and a year. What was kept is the shape: the hook, the running order, where the offer lands.' : "Reads Meta's public ad library for ads live between three months and a year. Chrome is doing this on your Mac, so it has to be awake. Costs nothing.", { done: extS.done, active: scanS.active || extS.active }, extS.done ? '7 formats' : scanS.active ? `${searches} of 6 searches · ${adsRead} ads read` : ''),
+      mk('Writing your ad ideas', 'Three ads per buyer — the headline, the body, the button, the picture prompt and where it points. Nothing is made or charged until you approve a row.', ideasS, ideasS.active || ideasS.done ? `${ideasN} ideas` : ''),
+    ];
+    const buildPct = step === 6 ? 100 : approved ? Math.round(30 + 70 * Math.min(1, t / POST)) : Math.round(30 * Math.min(1, t / PRE));
+    const buyers = BUYERS.map((b, i) => {
+      const show = pagesN > i, tag = b[2];
+      return { n: String(i + 1).padStart(2, '0'), name: b[0], pain: b[1], tag, slug: b[0].toLowerCase().replace(/^the /, '').replace(/[^a-z0-9]+/g, '-'),
+        tagColor: tag === 'Fears' ? '#B4560B' : tag === 'Needs' ? '#0E7C6B' : ACC, tagBg: tag === 'Fears' ? '#FDF1E4' : tag === 'Needs' ? '#E6F7F4' : '#EEF6FE',
+        op: show ? 1 : 0, ty: show ? 0 : 18, sc: show ? 1 : .96 };
+    });
+    const showLive = step === 5 && approved && (pagesS.active || pagesS.done);
+    const liveEyebrow = ideasS.active || ideasS.done ? 'Writing ad ideas' : extS.done || scanS.active || extS.active ? 'Pages are live' : 'Going live';
+    const liveTitle = ideasS.active || ideasS.done ? `${ideasN} ideas written, one buyer per call` : pagesS.done ? `${target} pages live, each on its own URL` : `${pagesN} of ${target} buyers written`;
+    const liveNote = scanS.active ? `${adsRead} ads read on your Mac` : pagesS.done ? 'In your brand colours · view and click tracking on' : 'Each one a different reason to buy';
+
+    const ideas = IDEAS.map((r, i) => {
+      const show = step === 6 && t >= 0;
+      const pic = !!pictures[i], ok = !!approvals[i];
+      return { buyer: r[0], format: r[1], primary: r[2], headline: r[3], cta: r[4], price: '$' + r[5].toFixed(2),
+        fmtBg: r[1] === 'Video' ? '#EEF6FE' : '#E6F7F4', fmtFg: r[1] === 'Video' ? ACC : '#0E7C6B',
+        hasPicture: pic, noPicture: !pic, approved: ok, notApproved: !ok,
+        bg: ok ? '#F0FBF9' : '#fff', border: ok ? '#BDEDE6' : LINE,
+        op: show ? 1 : 0, tx: show ? 0 : 24,
+        make: () => this.setState(s => ({ pictures: { ...s.pictures, [i]: true } })),
+        approve: () => this.setState(s => ({ approvals: { ...s.approvals, [i]: true }, pictures: { ...s.pictures, [i]: true } })) };
+    });
+    const spent = IDEAS.reduce((sum, r, i) => sum + (approvals[i] ? r[5] : pictures[i] ? 0.02 : 0), 0);
+
+    const bind = (k) => (e) => this.setDraft(k, e.target.value);
+    return {
+      step, draft: d, fx: { op: fade ? 0 : 1, ty: fade ? 8 : 0 },
+      is0: step === 0, is1: step === 1, is2: step === 2, is3: step === 3, is4: step === 4, isBuilding: step === 5, isTable: step === 6,
+      inWizard: step <= 4, inPipeline, barScale: step <= 4 ? (step + 1) / 7 : step === 5 ? .72 + .28 * (buildPct / 100) : 1,
+      campaignTitle, statusLabel: step === 6 ? STATUS.ready : atGate ? STATUS.base : approved ? (ideasS.active ? STATUS.ideas : scanS.active || extS.active ? STATUS.scan : pagesS.active ? STATUS.pages : STATUS.images) : briefS.active ? STATUS.brief : STATUS.read,
+      rail, kinds, modes, regions, splits, review, personaTarget: target,
+      modeUrl: d.mode === 'url', modeText: d.mode === 'text',
+      sourceIntro: vehicle ? 'Point us at the one you are selling. Every page we build describes this exact vehicle and nothing else.' : ebook ? 'Give us the book. We read it ourselves and build the pages from what it actually teaches, not from what its cover says.' : 'Point us at one product. Everything after this — the buyers, the pages, the ads — is built from this one thing, so pick the product you actually want to sell more of.',
+      urlLabel: vehicle ? 'Listing address' : 'Product page address', urlPlaceholder: vehicle ? 'https://www.carsales.com.au/cars/details/…' : 'https://yourshop.com/products/your-product',
+      urlHelp: err.source_url || (vehicle ? 'The Carsales, Boatsales, Marketplace or Gumtree listing — whatever page a buyer would land on today.' : 'Copy the address from your browser when you are looking at it, and paste it here.'),
+      urlHelpColor: err.source_url ? '#C2410C' : GREY, urlBorder: err.source_url ? '#F97316' : LINE,
+      textLabel: vehicle ? 'Describe the vehicle' : 'Describe the product', textPlaceholder: vehicle ? '2019 Ford Ranger Wildtrak, 96,400 km, auto, dual cab, full service history…' : 'A merino wool running shoe made in Australia, $160, for commuters who…',
+      textHelp: err.raw_input_text || 'What it is, who it is for, what it costs, and what makes it better than the obvious alternative. A short paragraph is enough. Minimum 40 characters.',
+      textHelpColor: err.raw_input_text ? '#C2410C' : GREY, textBorder: err.raw_input_text ? '#F97316' : LINE,
+      photosLabel: vehicle ? 'Photos of it' : 'Your own photos (optional)',
+      photosHelp: vehicle ? 'These become the pictures on every page, so put up as many good ones as you have.' : ebook ? 'A PDF has no photographs we can use, so anything visual comes from here.' : 'Only if you have shots that are not on the product page. We already read every photo that is.',
+      titlePlaceholder: campaignTitle,
+      onUrl: e => { const v = e.target.value; this.setState(s => ({ draft: { ...s.draft, source_url: v }, err: { ...s.err, source_url: undefined } })); },
+      onKey: e => { if (e.key === 'Enter') this.next(); }, onText: bind('raw_input_text'), onTitle: bind('title'), onCheckout: bind('checkout_url'), onOffer: bind('current_offer'),
+      buyIntro: contact ? 'Nobody buys a vehicle from a landing page, so these pages do not pretend otherwise. Every one ends in a button that rings you, and a short form underneath it.' : 'Every page we build ends in a button. This is where that button sends people.',
+      buyLabel: contact ? 'Phone number buyers should ring' : 'Checkout or buy link', buyPlaceholder: contact ? '0412 345 678' : 'https://yourshop.com/cart',
+      buyHelp: contact ? 'It becomes a tap-to-call button on every page and is printed in the button itself.' : 'Usually your cart, or the product page itself. Leave it empty and the button points back at the page you gave us.',
+      offerPlaceholder: contact ? 'Priced to sell, inspections this weekend' : '20% off + free shipping, ends Sunday',
+      next: () => this.next(), back: () => this.go(Math.max(0, step - 1)), build: () => this.build(), approve: () => this.approve(), restart: () => this.restart(),
+      buildHeadline: step === 6 ? 'Done.' : atGate ? 'One thing needs you.' : approved ? 'Building the rest.' : 'Reading, then writing.',
+      stages, buildPct, atGate, showLive, buyers: buyers, moreBuyers: pagesN > 8, moreBuyersText: `…and ${Math.max(0, pagesN - 8)} more, all live at /p/${slug}/…`,
+      liveEyebrow, liveTitle, liveNote, host, slug,
+      offerBar: d.current_offer.trim() || (contact ? 'Inspections this weekend' : 'Free shipping on every order'),
+      heroHeadline: vehicle ? 'One owner, full history, ready to work Monday.' : ebook ? 'Read it tonight. Use it tomorrow morning.' : 'A running shoe your feet stay dry in, made from wool.',
+      heroSub: vehicle ? 'Everything on this page describes this exact vehicle.' : 'Merino upper, sugarcane sole, machine washable. $160 with free returns for 30 days.',
+      reasons: ['Merino wicks sweat instead of trapping it', 'Wide toe box, no break-in period', 'Machine washable, air dry overnight', 'Carbon-negative sole from sugarcane', '30-day returns, worn or not', 'Made in Australia, shipped in two days', 'Fits sockless without odour', 'Lace-free option for the airport', 'One shoe for the commute and the gym', '4.8 stars from 2,100 reviews'].map((text, i) => ({ n: String(i + 1).padStart(2, '0'), text, color: i >= 3 ? '#5B6672' : NAVY })),
+      testimonial: '"Wore them sockless on a 32° day and my feet were fine. I didn\'t believe it either."',
+      ideas, ideaCountText: String(target * 3), spent: spent.toFixed(2), spentPct: Math.min(100, spent / 150 * 100),
+    };
+  }
+}
+</script>
+</body>
+</html>
