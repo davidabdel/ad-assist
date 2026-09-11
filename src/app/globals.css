@@ -1,77 +1,67 @@
 @import "tailwindcss";
 
 /**
- * THE BRAND LAYER.
+ * THE BRAND LAYER — adtocart.cc.
  *
- * The design comp ships two directions of the same identity — "Paper" (warm
- * off-white, light Outfit, pill buttons) and "Ink" (white page, black rail,
- * heavy Outfit, square edges). Both share the typeface pair and the one blue
- * accent; they differ only in the neutral ramp and the corner radius. So the
- * fork is a block of values, not a fork in the components: swap the ramp below
- * and --radius-brand, and every screen follows.
+ * Manrope throughout, a navy that does the work black used to, one blue accent,
+ * and a blue→teal gradient spent only on the moments that matter: the build
+ * button, the progress bar, the second line of the headline. Values come from
+ * the Claude Design handoff in design/design_handoff_adtocart_saas/README.md.
  *
  * WHY THE ZINC RAMP IS REPAINTED RATHER THAN REPLACED. Every dashboard screen
- * already speaks in zinc-*, and it uses nothing else — 200-odd class names
- * across five components. Retuning the ramp repaints all of them without
- * editing a single class list, which is the point: this is a reskin, and a
- * reskin that rewrites 200 class names is a reskin that can change behaviour.
+ * already speaks in zinc-*, and the campaign screen alone has hundreds of those
+ * class names. Retuning the ramp to the brand's cool slate greys (with navy at
+ * 900) repaints all of them without editing a class list, so a restyle cannot
+ * change behaviour by accident.
  *
  * THIS CANNOT REACH A LIVE AD DESTINATION. The public /p/ pages use zero
  * Tailwind colour classes — they are driven entirely by --brand-* variables
  * read off the seller's own website (see lib/brand.ts), and Listicle sets its
- * own background, colour and font-family on its wrapper. Verified by grep
- * before this file was written.
+ * own background, colour and font-family on its wrapper.
  */
 
 @theme {
-  /* ---- Ink (live). Paper's values are kept underneath, commented. ---- */
-  --color-zinc-50: #fafafa;
-  --color-zinc-100: #f5f5f5;
-  --color-zinc-200: #ececec;
-  --color-zinc-300: #d6d6d6;
-  --color-zinc-400: #b0b0b0;
-  --color-zinc-500: #6f6f6f;
-  --color-zinc-600: #4a4a4a;
-  --color-zinc-700: #2a2a2a;
-  --color-zinc-800: #17171a;
-  --color-zinc-900: #0b0b0c;
-  --color-zinc-950: #050506;
+  /* Cool slate, navy at the dark end. Each stop is a colour the handoff names. */
+  --color-zinc-50: #f6f8fa;
+  --color-zinc-100: #f1f4f7;
+  --color-zinc-200: #e7ebf0;
+  --color-zinc-300: #dde3ea;
+  --color-zinc-400: #8b949e;
+  --color-zinc-500: #5b6672;
+  --color-zinc-600: #3e4a59;
+  --color-zinc-700: #2a3645;
+  --color-zinc-800: #0f2240;
+  --color-zinc-900: #06162e;
+  --color-zinc-950: #030b17;
 
-  /* ---- Paper. Uncomment this block and comment the one above to switch. ----
-  --color-zinc-50:  #faf8f4;
-  --color-zinc-100: #f6f3ee;
-  --color-zinc-200: #e3ded4;
-  --color-zinc-300: #d9d3c8;
-  --color-zinc-400: #a39d92;
-  --color-zinc-500: #6b665c;
-  --color-zinc-600: #4c473e;
-  --color-zinc-700: #35312a;
-  --color-zinc-800: #24211b;
-  --color-zinc-900: #16140f;
-  --color-zinc-950: #0d0b08;
-  ---------------------------------------------------------------------- */
+  --color-navy: #06162e;
+  --color-accent: #087de8;
+  --color-accent-deep: #0667c0;
+  --color-accent-tint: #eef6fe;
+  --color-mid: #079fd5;
+  --color-teal: #08c7b2;
+  --color-teal-deep: #0e7c6b;
+  --color-teal-tint: #f0fbf9;
+  --color-teal-line: #bdede6;
+  --color-amber-ink: #b4560b;
+  --color-amber-tint: #fdf1e4;
 
-  /* The one accent, identical in both directions. */
-  --color-accent: #2f6bff;
-  --color-accent-deep: #1f4fd1;
-  --color-accent-tint: #eef3ff;
-
-  /* Ink squares its corners; Paper rounds them to a pill. Everything that has
-     a brand-owned shape reads this rather than a Tailwind radius. */
-  --radius-brand: 0px;      /* Paper: 999px */
-  --radius-brand-card: 0px; /* Paper: 18px  */
+  /* Pills for controls, soft cards for panels. */
+  --radius-brand: 999px;
+  --radius-brand-card: 14px;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-manrope);
-  --font-display: var(--font-outfit);
+  --font-display: var(--font-manrope);
 }
 
 :root {
   --background: #ffffff;
-  --foreground: #0b0b0c;
+  --foreground: #06162e;
+  --brand-gradient: linear-gradient(90deg, #087de8, #079fd5, #08c7b2);
 }
 
 /**
@@ -93,34 +83,51 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/**
- * Headlines are the loudest thing the comp does: Outfit, tight tracking, and
- * in Ink a weight the body text never uses. Set once here rather than on every
- * heading so a screen cannot forget it.
- *
- * SCOPED TO .dash ON PURPOSE. A bare `h1 { font-family }` rule would beat the
- * inherited family the public listicle sets on its own wrapper, and repaint a
- * seller's branded page in our typeface. `.dash` is set by the Shell, which
- * every signed-in screen goes through and no public page does.
- */
-.dash h1,
-.dash h2,
-.dash h3,
-.dash .font-display {
-  font-family: var(--font-outfit), var(--font-manrope), system-ui, sans-serif;
+/* The gradient, as a fill and as text. */
+.bg-brand-gradient {
+  background-image: var(--brand-gradient);
+}
+.text-brand-gradient {
+  background-image: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /**
- * Tracking is set only on the headings, and deliberately NOT on .font-display.
- * A descendant selector outranks a Tailwind utility class, so putting
- * letter-spacing on .font-display quietly beat every `tracking-*` on the
- * elements wearing it — the wizard's "STEP 1 OF 5" eyebrow rendered as
- * "STEP1OF5".
- *
- * h3 is left out for the same reason: the only h3s on the dashboard are the
- * small uppercase group labels, which want tracking opened up, not closed.
+ * Headlines: heavy and tight. Scoped to .dash and .site so a bare `h1` rule can
+ * never reach a seller's branded /p/ page, which sets its own type.
  */
 .dash h1,
-.dash h2 {
+.dash h2,
+.site h1,
+.site h2 {
+  font-weight: 800;
   letter-spacing: -0.035em;
+  text-wrap: pretty;
+}
+
+/* A step change: fade and an 8px rise. */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise {
+  animation: rise-in 220ms ease both;
+}
+
+/* A card arriving in the live-pages grid. */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.animate-card-in {
+  animation: card-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-card-in {
+    animation: none;
+  }
 }

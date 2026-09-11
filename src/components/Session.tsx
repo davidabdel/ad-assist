@@ -21,6 +21,9 @@ type Ctx = {
   ready: boolean;
   email: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  /** Emails a one-time sign-in link. `create` decides whether a new address gets an account. */
+  sendLink: (email: string, opts: { create: boolean; next?: string }) => Promise<void>;
+  signInWithGoogle: (next?: string) => Promise<void>;
   signOut: () => Promise<void>;
   api: <T>(path: string, init?: RequestInit) => Promise<T>;
 };
@@ -78,10 +81,52 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (error) {
       throw new Error(
         error.message === 'Invalid login credentials'
-          ? 'That email and password do not match an account.'
+          ? 'That email and password do not match an account. Signed up with a link? '
+            + 'Press "Forgot it?" and we will email you another.'
           : error.message,
       );
     }
+  }, []);
+
+  const sendLink = useCallback(async (
+    email: string,
+    { create, next = '/campaigns' }: { create: boolean; next?: string },
+  ) => {
+    const { error } = await browserClient().auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: create, emailRedirectTo: `${window.location.origin}${next}` },
+    });
+    if (error) {
+      throw new Error(
+        /signups? not allowed|otp_disabled/i.test(error.message)
+          ? (create
+            ? 'New accounts are switched off right now. Ask David to open sign-ups.'
+            : 'There is no account for that email. Create one instead.')
+          : error.message,
+      );
+    }
+  }, []);
+
+  /**
+   * Asks Supabase whether Google is switched on before sending anybody there.
+   * With the provider off, the redirect lands on a bare JSON error page on
+   * supabase.co — a dead end with no way back — so it is checked here and said
+   * in a sentence instead.
+   */
+  const signInWithGoogle = useCallback(async (next = '/campaigns') => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+    const settings = await fetch(`${url}/auth/v1/settings`, { headers: { apikey: anon } })
+      .then((r) => r.json() as Promise<{ external?: Record<string, boolean> }>)
+      .catch(() => null);
+    if (settings && !settings.external?.google) {
+      throw new Error('Google sign-in is not switched on yet. Use your email instead.');
+    }
+    const { error } = await browserClient().auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}${next}` },
+    });
+    if (error) throw new Error(error.message);
   }, []);
 
   const signOut = useCallback(async () => {
@@ -118,9 +163,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     ready,
     email: session?.user.email ?? null,
     signIn,
+    sendLink,
+    signInWithGoogle,
     signOut,
     api,
-  }), [session, ready, signIn, signOut, api]);
+  }), [session, ready, signIn, sendLink, signInWithGoogle, signOut, api]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

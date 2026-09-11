@@ -52,6 +52,32 @@ and the live model — this one **spends money**:
 ./scripts/smoke-pipeline.sh --cleanup  # delete the throwaway owner and its rows
 ```
 
+## Pages and sign-in
+
+| Path | What it is |
+|---|---|
+| `/` | adtocart.cc marketing page. Public, static |
+| `/login` | Log in (email + password) or create an account (emailed link) |
+| `/campaigns` | Your campaigns, or the wizard when there are none. `?new=1` opens the wizard |
+| `/campaigns/{id}` | The build, the approval gate, the ad ideas table |
+| `/p/...` | The public buyer pages. Outside the brand, on purpose |
+
+**Sign-ups are open.** Anyone can make an account, and every campaign spends the
+OpenAI and KIE keys this app runs on. Three Supabase settings under
+Authentication decide whether that works:
+
+- **Sign In / Providers → Email**: "Allow new users to sign up" on. Off, the
+  Create account tab says sign-ups are closed.
+- **Sign In / Providers → Google**: switch it on and add the Google client id
+  and secret. Off, the Google button says so rather than sending people to a
+  Supabase error page.
+- **URL Configuration**: add the site's own URL plus `/campaigns` to the
+  redirect allow list, or email links and Google send people to the Site URL
+  instead of back to the app.
+
+The visual design these pages were rebuilt from is in
+`design/design_handoff_adtocart_saas/` — open the `.dc.html` files in a browser.
+
 ## The pipeline
 
 Each `POST /api/campaigns/{id}/advance` does **one unit of work** and returns.

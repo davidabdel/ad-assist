@@ -1,8 +1,8 @@
 import { publicClient, serviceClient } from './supabase';
 
 /**
- * Single-user for now (David's ruling, 6 Sep), but the campaigns are owner-scoped
- * in the schema so a second login is a login, not a migration.
+ * Anyone can sign up (since 11 Sep — /login creates accounts by emailed link or
+ * Google), and every campaign is owner-scoped, so each account sees only its own.
  *
  * The API routes do their work with the service role, which bypasses RLS. That
  * makes the ownership check here the only thing standing between a request and
