@@ -7,7 +7,9 @@ import { useSession } from '@/components/Session';
 import {
   Button, Callout, Card, CopyButton, Field, Shell, inputClass,
 } from '@/components/ui';
-import { buildSteps, DEFAULT_PERSONA_TARGET, type Step, type StepState } from '@/lib/campaign-steps';
+import {
+  buildSteps, DEFAULT_PERSONA_TARGET, STATUS_LABEL, type Step, type StepState,
+} from '@/lib/campaign-steps';
 import { describeLive, type LiveStatus } from '@/lib/campaign-live';
 import { CTA_LABELS } from '@/lib/ad-fields';
 
@@ -36,6 +38,8 @@ type Persona = {
   slug: string;
   persona_name: string;
   angle_hook: string;
+  /** The line on the buyer's card. The route has always sent it; nothing drew it. */
+  primary_pain_point?: string | null;
   url: string;
   views_count: number;
   clicks_count: number;
@@ -299,6 +303,25 @@ const PICTURE_USD = 0.02;
 function money(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/** The shop's address without the scheme or the www, or null if it is not one. */
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The small blue line over a heading. */
+const EYEBROW = 'text-xs font-bold uppercase tracking-[0.14em] text-accent';
+/** The label over a value, and every table header. */
+const MICRO = 'text-[11px] font-bold uppercase tracking-[0.1em] text-zinc-400';
 
 /**
  * What "something actually happened" reduces to.
@@ -603,7 +626,7 @@ export function CampaignProgress({ id }: { id: string }) {
 
   if (!view) {
     return (
-      <Shell header={<TopBar />}>
+      <Shell wide header={<TopBar />}>
         {error ? <Callout tone="error" title="Could not open this campaign">{error}</Callout>
           : <p className="text-zinc-500">Loading…</p>}
       </Shell>
@@ -653,6 +676,9 @@ export function CampaignProgress({ id }: { id: string }) {
   // The gate is open only when the page it is gating actually exists. At
   // `base_review` with no row yet, the page is still being written.
   const awaitingApproval = campaign.status === 'base_review' && Boolean(basePage);
+  const imagesPlaced = (basePage?.reasons ?? []).filter((r) => r.image_url).length
+    + (basePage?.hero_image_url ? 1 : 0);
+  const buyersWithIdeas = new Set(ideas.map((i) => i.persona_id)).size;
 
   const steps = buildSteps({
     status: campaign.status,
@@ -668,15 +694,14 @@ export function CampaignProgress({ id }: { id: string }) {
     ingestDone: campaign.status !== 'pending' && !waitingOnIngest,
     usesMac: Boolean(ingest),
     hasImages: images.length > 0,
-    imagesPlaced: (basePage?.reasons ?? []).filter((r) => r.image_url).length
-      + (basePage?.hero_image_url ? 1 : 0),
+    imagesPlaced,
     scanJobsTotal: scan.jobsTotal,
     scanJobsDone: scan.jobsDone,
     adsFound: scan.adsFound,
     adsQualified: scan.adsQualified,
     formatCount: formats.length,
     ideaCount: ideas.length,
-    buyersWithIdeas: new Set(ideas.map((i) => i.persona_id)).size,
+    buyersWithIdeas,
     ideasGenerated: ideas.filter((i) => i.status === 'generated').length,
   });
 
@@ -735,36 +760,114 @@ export function CampaignProgress({ id }: { id: string }) {
       : now - Date.parse(scan.readingSince),
   });
 
+  // The circle turns only while something is genuinely driving the campaign —
+  // the same test the status strip uses for its pulsing dot.
+  const moving = live.kind === 'working' || live.kind === 'waiting-for-mac';
+  const approved = steps.find((s) => s.key === 'base')?.state === 'done';
+
+  // One bar, drawn twice: 3px across the top of the window and under the
+  // steps. Whole steps from the same rows the checklist draws, plus how far
+  // through the running step is when that step counts its own progress, so
+  // the bar moves while twenty pages are being written rather than sitting.
+  const activeStep = steps.find((s) => s.state === 'active');
+  const partial = activeStep?.key === 'pages' ? livePersonas.length / target
+    : activeStep?.key === 'scan' && scan.jobsTotal ? scan.jobsDone / scan.jobsTotal
+      : activeStep?.key === 'ideas' && livePersonas.length ? buyersWithIdeas / livePersonas.length
+        : 0;
+  const doneSteps = steps.filter((s) => s.state === 'done').length;
+  const progress = finished ? 1 : Math.min(1, (doneSteps + Math.min(1, partial)) / steps.length);
+
+  const buildHeadline = finished ? 'Done.'
+    : failed ? 'It stopped.'
+      : awaitingApproval ? 'One thing needs you.'
+        : approved ? 'Building the rest.'
+          : 'Reading, then writing.';
+
+  /** The short blue number on the right of a step, from what the step produced. */
+  function countFor(step: Step): string {
+    switch (step.key) {
+      case 'read':
+        return step.state === 'done' && brief
+          ? `${plural(brief.image_urls?.length ?? 0, 'photo')} · `
+            + `${plural(brief.review_snippets?.length ?? 0, 'review')}`
+          : '';
+      case 'brief':
+        return step.state === 'done' && brief?.gaps?.length
+          ? `${plural(brief.gaps.length, 'gap')} noted` : '';
+      case 'base':
+        return awaitingApproval ? 'Waiting for you' : '';
+      case 'images':
+        return step.state === 'done' && images.length ? `${imagesPlaced} placed` : '';
+      case 'pages':
+        return step.state === 'active' || step.state === 'done'
+          ? `${livePersonas.length} of ${target}` : '';
+      case 'scan':
+        if (step.state === 'done' && formats.length) return plural(formats.length, 'format');
+        return step.state === 'active' && scan.jobsTotal
+          ? `${scan.jobsDone} of ${scan.jobsTotal} searches`
+            + (scan.adsFound ? ` · ${scan.adsFound} ads read` : '')
+          : '';
+      case 'ideas':
+        return ideas.length ? plural(ideas.length, 'idea') : '';
+      default:
+        return '';
+    }
+  }
+
+  // The right-hand column's heading once the buyers are arriving. Follows the
+  // run on from the pages, because the column stays the same while the scan
+  // and the ideas happen beside it.
+  const pagesEyebrow = campaign.status === 'writing_ideas' ? 'Writing ad ideas'
+    : pagesLive ? 'Pages are live' : 'Going live';
+  const pagesTitle = campaign.status === 'writing_ideas'
+    ? `${plural(ideas.length, 'idea')} written, one buyer per call`
+    : pagesLive ? `${livePersonas.length} pages live, each on its own URL`
+      : `${livePersonas.length} of ${target} buyers written`;
+  const pagesNote = campaign.status === 'scanning' ? `${scan.adsFound} ads read on your Mac`
+    : pagesLive ? 'View and click tracking on' : 'Each one a different reason to buy';
+
   return (
-    <Shell header={<TopBar />}>
-      <div className="mb-8">
-        <Link
-          href="/"
-          className="text-sm font-semibold text-zinc-500 underline underline-offset-4 hover:text-accent"
-        >
-          ← All campaigns
-        </Link>
-        <h1 className="mt-4 text-5xl font-bold">{campaign.title}</h1>
-        {/* One strip, five possible states, and it is never allowed to describe
-            the campaign without also describing whether anything is driving it.
-            The sentence it replaced chose its branch from the status alone,
-            which is how a campaign motionless for eight minutes rendered "Now
-            reading Meta's ad library". */}
-        <LiveStrip status={live} onCarryOn={failed ? null : drive} />
-        {pagesLive && !failed && livePersonas.length ? (
-          <p className="mt-3 text-lg leading-relaxed text-zinc-500">
-            {livePersonas.length} pages are live. That part is finished and nothing below can
-            undo it.
-          </p>
-        ) : null}
-      </div>
+    <Shell
+      wide
+      header={(
+        <TopBar
+          progress={progress}
+          right={(
+            <span className="min-w-0 truncate">
+              <span className="font-bold text-zinc-900">{campaign.title}</span>
+              <span className="hidden sm:inline">
+                {' · '}{STATUS_LABEL[campaign.status] ?? campaign.status}
+              </span>
+            </span>
+          )}
+        />
+      )}
+    >
+      <Link
+        href="/campaigns"
+        className="text-sm font-semibold text-zinc-500 hover:text-accent"
+      >
+        ← All campaigns
+      </Link>
+      {/* One strip, five possible states, and it is never allowed to describe
+          the campaign without also describing whether anything is driving it.
+          The sentence it replaced chose its branch from the status alone,
+          which is how a campaign motionless for eight minutes rendered "Now
+          reading Meta's ad library". */}
+      <LiveStrip status={live} onCarryOn={failed ? null : drive} />
+      {pagesLive && !failed && livePersonas.length ? (
+        <p className="mt-3 text-[15px] leading-relaxed text-zinc-500">
+          {livePersonas.length} pages are live. That part is finished and nothing below can
+          undo it.
+        </p>
+      ) : null}
 
       {/* Gated on nothing having CLAIMED the work, not on the work being
           unfinished. A search that Chrome is reading right now is unfinished
           too, and telling him to open Terminal over a healthy run is how the
           screen made a working four-minute scan look like his problem. */}
       {noWorkerRunning ? (
-        <div className="mb-6">
+        <div className="mt-5">
           <Callout
             tone="warn"
             title={waitingOnScan ? 'The ad scan needs your Mac' : 'This shop needs your Mac'}
@@ -789,7 +892,7 @@ export function CampaignProgress({ id }: { id: string }) {
                 : 'Almost every shop is read without it, but this one has to be opened in a real '
                   + 'browser. Open Terminal, paste this, and leave the window open:'}
             </p>
-            <pre className="mt-2 overflow-x-auto rounded-[var(--radius-brand-card)] bg-amber-100 px-3 py-2 font-mono text-xs">
+            <pre className="mt-2 overflow-x-auto rounded-lg border border-[#F3D9BC] bg-white/70 px-3 py-2 font-mono text-xs text-zinc-900">
               cd ~/.buzz/REPOS/ad-assist/scanner &amp;&amp; npm start
             </pre>
             <p className="mt-2">
@@ -809,11 +912,11 @@ export function CampaignProgress({ id }: { id: string }) {
       ) : null}
 
       {failed ? (
-        <div className="mb-6">
+        <div className="mt-5">
           <Callout tone="error" title="It stopped here">
             <p>{campaign.error_message ?? 'No reason was recorded.'}</p>
             <div className="mt-3">
-              <Button onClick={retry} disabled={retrying}>
+              <Button className="px-5 py-2.5 text-sm" onClick={retry} disabled={retrying}>
                 {retrying ? 'Trying again…' : 'Try again'}
               </Button>
             </div>
@@ -826,71 +929,110 @@ export function CampaignProgress({ id }: { id: string }) {
       ) : null}
 
       {error && !failed ? (
-        <div className="mb-6">
+        <div className="mt-5">
           <Callout tone="error" title="The last step did not go through">
             <p>{error}</p>
             <div className="mt-3">
-              <Button onClick={drive} disabled={running}>Carry on</Button>
+              <Button className="px-5 py-2.5 text-sm" onClick={drive} disabled={running}>Carry on</Button>
             </div>
           </Callout>
         </div>
       ) : null}
 
-      {/* Rule-separated rather than spaced apart: this is the screen the comp
-          draws, and its checklist is a stack of hard rules with a square
-          marker on each row. */}
-      <Card className="py-2 sm:py-3">
-        <ol>
-          {steps.map((step) => (
-            <StepRow
-              key={step.key}
-              step={step}
-              spinning={running}
-              view={view}
-              live={livePersonas}
-              superseded={oldPersonas}
-              busy={running || retrying}
-              onPreview={previewRedo}
-              onRedo={redoStep}
+      {/* The build view: the steps on the left, and on the right whatever the
+          run needs the operator to look at now — the main page while it waits
+          for approval, the buyers' pages once they are being written. */}
+      <div className="mt-10 grid items-start gap-12 lg:grid-cols-[480px_minmax(0,1fr)] lg:gap-14">
+        <section className="flex min-w-0 flex-col gap-[22px]">
+          <h1 className="text-[32px] leading-[1.08] sm:text-[38px]">{buildHeadline}</h1>
+          <div>
+            <ol>
+              {steps.map((step) => (
+                <StepRow
+                  key={step.key}
+                  step={step}
+                  count={countFor(step)}
+                  waiting={step.key === 'base' && awaitingApproval}
+                  spinning={moving}
+                  view={view}
+                  live={livePersonas}
+                  superseded={oldPersonas}
+                  busy={running || retrying}
+                  onPreview={previewRedo}
+                  onRedo={redoStep}
+                />
+              ))}
+            </ol>
+            <div
+              className="mt-1.5 h-1 overflow-hidden rounded-sm bg-zinc-200"
+              role="progressbar"
+              aria-label="How far through the build"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress * 100)}
+            >
+              <div
+                className="bg-brand-gradient h-full transition-[width] duration-300 ease-linear"
+                style={{ width: `${progress * 100}%` }}
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="flex min-w-0 flex-col lg:min-h-[560px]">
+          {awaitingApproval && basePage ? (
+            <BasePageReview
+              page={basePage}
+              slug={campaign.slug}
+              host={hostOf(campaign.source_url) ?? hostOf(basePage.cta_url)}
+              target={target}
+              lastGuidance={campaign.base_page_guidance}
+              foundPhotos={foundPhotos}
+              onDecide={decideBasePage}
             />
-          ))}
-        </ol>
-      </Card>
+          ) : livePersonas.length ? (
+            <LivePages
+              slug={campaign.slug}
+              personas={livePersonas}
+              target={target}
+              live={pagesLive}
+              eyebrow={pagesEyebrow}
+              title={pagesTitle}
+              note={pagesNote}
+            />
+          ) : (
+            <Upcoming approved={approved} target={target} />
+          )}
+        </section>
+      </div>
 
-      {awaitingApproval && basePage ? (
-        <BasePageReview
-          page={basePage}
-          slug={campaign.slug}
-          target={target}
-          lastGuidance={campaign.base_page_guidance}
-          foundPhotos={foundPhotos}
-          onDecide={decideBasePage}
-        />
-      ) : null}
-
-      {/* Above the page list on purpose: once a vehicle campaign is live, the
+      {/* Above the ideas on purpose: once a vehicle campaign is live, the
           enquiries are the only thing on this screen worth opening it for. */}
       {leads.length ? <Leads leads={leads} /> : null}
 
       {/* Above the formats, because once the ideas exist they are what the
           operator opens this screen for. The formats become the evidence
           underneath them, the same way the ads are evidence for the formats. */}
-      {ideas.length
-        ? <Ideas ideas={ideas} spend={spend} onAction={ideaAction} onMakePictures={makePictures} />
-        : null}
+      {ideas.length ? (
+        <Ideas
+          ideas={ideas}
+          spend={spend}
+          stillWriting={campaign.status === 'writing_ideas'}
+          onAction={ideaAction}
+          onMakePictures={makePictures}
+        />
+      ) : null}
 
       {formats.length ? <Formats formats={formats} scan={scan} /> : null}
 
       {ads.length ? <ScannedAds ads={ads} scan={scan} /> : null}
 
-      {pagesLive ? <LivePages campaign={campaign} personas={livePersonas} target={target} /> : null}
-
       {log.length ? (
-        <details className="mt-6">
-          <summary className="cursor-pointer text-sm font-semibold text-zinc-500">
+        <details className="mt-10">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
             What it has done so far
           </summary>
-          <ul className="mt-3 space-y-1.5 text-sm text-zinc-600">
+          <ul className="mt-3 space-y-1.5 text-[13px] leading-relaxed text-zinc-500">
             {log.map((line, i) => <li key={`${i}-${line}`}>· {line}</li>)}
           </ul>
         </details>
@@ -918,9 +1060,13 @@ export function CampaignProgress({ id }: { id: string }) {
  * answer to "where is it up to".
  */
 function StepRow({
-  step, spinning, view, live, superseded, busy, onPreview, onRedo,
+  step, count, waiting, spinning, view, live, superseded, busy, onPreview, onRedo,
 }: {
   step: Step;
+  /** The short number on the right of the row, when the step has one. */
+  count: string;
+  /** This step is the gate and the gate is open: it is waiting on the operator. */
+  waiting: boolean;
   spinning: boolean;
   view: CampaignView;
   live: Persona[];
@@ -935,40 +1081,58 @@ function StepRow({
   // back. Before that there is nothing to look at, and "do it again" would mean
   // "do it", which the screen is already doing.
   const openable = step.state === 'done' || step.state === 'failed';
+  // What has not started yet is drawn faint and says nothing but its name. Its
+  // sentence appears the moment it starts.
+  // A stage that does not exist yet keeps its sentence, because the sentence
+  // is the only thing saying so.
+  const pending = step.state === 'todo' && !waiting;
+  const faint = pending || step.state === 'unbuilt';
 
   return (
-    <li className="border-t-2 border-zinc-900 first:border-t-0">
-      <div className="flex gap-4 py-4">
-        <Bullet state={step.state} spinning={spinning} />
+    <li
+      className={`border-t border-zinc-200 transition-opacity duration-[400ms] ${
+        faint ? 'opacity-[.55]' : ''
+      }`}
+    >
+      <div className="flex gap-4 py-[13px]">
+        <Bullet state={step.state} waiting={waiting} spinning={spinning} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-4">
-            <p className={`font-display text-lg font-semibold tracking-[-0.02em] ${
-              step.state === 'unbuilt' ? 'text-zinc-400'
-                : step.state === 'failed' ? 'text-red-700' : 'text-zinc-900'
+          <div className="flex items-start justify-between gap-3">
+            <p className={`text-[15px] font-bold leading-snug ${
+              faint ? 'text-zinc-400'
+                : step.state === 'failed' ? 'text-[#C2410C]' : 'text-zinc-900'
             }`}
             >
               {step.title}
               {step.state === 'unbuilt'
-                ? <span className="ml-2 align-middle text-xs font-bold uppercase tracking-wide text-zinc-400">Not built yet</span>
+                ? <span className="ml-2 align-middle text-[11px] font-bold uppercase tracking-[0.1em] text-zinc-400">Not built yet</span>
                 : null}
             </p>
-            {openable ? (
-              <button
-                type="button"
-                onClick={() => setOpen((o) => !o)}
-                className="shrink-0 text-sm font-semibold text-accent underline underline-offset-4"
-              >
-                {open ? 'Close' : 'Open'}
-              </button>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-3 pt-0.5">
+              {count ? (
+                <span className="whitespace-nowrap text-xs font-bold text-accent tabular-nums">{count}</span>
+              ) : null}
+              {openable ? (
+                <button
+                  type="button"
+                  onClick={() => setOpen((o) => !o)}
+                  aria-expanded={open}
+                  className="text-xs font-bold text-zinc-500 underline underline-offset-[3px] hover:text-zinc-900"
+                >
+                  {open ? 'Close' : 'Open'}
+                </button>
+              ) : null}
+            </div>
           </div>
-          <p className={`mt-1 text-sm leading-6 ${step.state === 'unbuilt' ? 'text-zinc-400' : 'text-zinc-500'}`}>
-            {step.detail}
-          </p>
+          {pending ? null : (
+            <p className="mt-[3px] text-[13px] leading-normal text-zinc-500">
+              {step.detail}
+            </p>
+          )}
           {!open && view.campaign.step_guidance?.[step.key] ? (
             // Visible closed, because a note that only exists behind a click is
             // one the operator writes a second time.
-            <p className="mt-2 text-sm text-zinc-500">
+            <p className="mt-1.5 text-[13px] text-zinc-500">
               <span className="font-semibold text-zinc-900">Your note:</span>{' '}
               {view.campaign.step_guidance[step.key]}
             </p>
@@ -977,7 +1141,7 @@ function StepRow({
       </div>
 
       {open ? (
-        <div className="mb-5 ml-10 border-l-2 border-zinc-200 pl-5">
+        <div className="animate-rise mb-4 ml-[42px] rounded-[14px] border border-zinc-200 bg-zinc-50 p-5">
           <StepOutput step={step.key} view={view} live={live} superseded={superseded} />
           <RedoBox
             stepKey={step.key}
@@ -1012,7 +1176,7 @@ function StepOutput({
       <Panel>
         <Detail label="Read from">
           {campaign.source_url
-            ? <a href={campaign.source_url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-4">{campaign.source_url}</a>
+            ? <a href={campaign.source_url} target="_blank" rel="noreferrer" className="break-all text-accent underline underline-offset-[3px]">{campaign.source_url}</a>
             : 'What you typed in, rather than a web page.'}
         </Detail>
         <Detail label="How">
@@ -1131,7 +1295,7 @@ function StepOutput({
           {images.map((img) => (
             <li key={img.position} className="flex gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={img.source_url} alt="" className="size-16 shrink-0 object-cover" />
+              <img src={img.source_url} alt="" className="size-16 shrink-0 rounded-lg border border-zinc-200 object-cover" />
               <div className="min-w-0 text-sm">
                 <p className="text-zinc-900">{img.caption || <span className="text-zinc-400">no caption written</span>}</p>
                 <p className="mt-0.5 text-zinc-500">
@@ -1154,7 +1318,7 @@ function StepOutput({
         <ul className="space-y-2">
           {live.map((p) => (
             <li key={p.id} className="text-sm">
-              <a href={p.url} target="_blank" rel="noreferrer" className="font-semibold text-accent underline underline-offset-4">
+              <a href={p.url} target="_blank" rel="noreferrer" className="font-semibold text-accent underline underline-offset-[3px]">
                 {p.persona_index}. {p.persona_name}
               </a>
               <br />
@@ -1166,7 +1330,7 @@ function StepOutput({
           // Never hidden. These pages are still on the web and still the
           // destination of ads that have been paid for; an operator who cannot
           // see them cannot know what their traffic is landing on.
-          <div className="mt-4 border-t-2 border-zinc-200 pt-3">
+          <div className="mt-4 border-t border-zinc-200 pt-3">
             <p className="text-sm font-semibold text-zinc-900">
               {superseded.length} older page{superseded.length === 1 ? '' : 's'}, still live
             </p>
@@ -1252,9 +1416,9 @@ function Empty({ children }: { children: ReactNode }) {
 /** Named Detail, not Field: `Field` is the form control in lib/ui. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="mt-3 first:mt-0">
-      <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">{label}</p>
-      <div className="mt-0.5 text-zinc-600">{children}</div>
+    <div className="mt-3.5 first:mt-0">
+      <p className={MICRO}>{label}</p>
+      <div className="mt-1 text-zinc-600">{children}</div>
     </div>
   );
 }
@@ -1313,10 +1477,10 @@ function RedoBox({
   }
 
   return (
-    <div className="border-t-2 border-zinc-200 pt-4">
+    <div className="border-t border-zinc-200 pt-4">
       {hasPrompt ? (
         <>
-          <label htmlFor={`note-${stepKey}`} className="text-xs font-bold uppercase tracking-wide text-zinc-400">
+          <label htmlFor={`note-${stepKey}`} className={MICRO}>
             What is wrong with it
           </label>
           <textarea
@@ -1326,27 +1490,27 @@ function RedoBox({
             rows={3}
             maxLength={2000}
             placeholder="Plain English. “The price is $40 a month, not $40.” “Stop choosing the packaging shots.”"
-            className="mt-1 w-full border-2 border-zinc-900 p-3 text-sm leading-6 outline-none focus:border-accent"
+            className={`${inputClass} mt-1.5`}
           />
-          <p className="mt-1 text-sm leading-6 text-zinc-500">
+          <p className="mt-1.5 text-[13px] leading-normal text-zinc-500">
             This is added to the instruction behind this step, and stays on it — every
             future run of this step gets it too, not just the next one. Leave it empty
             to clear it and get a plain re-roll.
           </p>
         </>
       ) : (
-        <p className="text-sm leading-6 text-zinc-500">
+        <p className="text-[13px] leading-normal text-zinc-500">
           There is no instruction behind this step — it is a download, not a piece of
           writing, so there is nothing a note could change. If what came back is wrong,
           send back the summary underneath it instead.
         </p>
       )}
 
-      {error ? <p className="mt-3 text-sm font-semibold text-red-700">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm font-semibold text-[#C2410C]">{error}</p> : null}
 
       {effects ? (
-        <div className="mt-4 border-2 border-zinc-900 p-4">
-          <p className="font-display text-base font-semibold text-zinc-900">
+        <div className="mt-4 rounded-[14px] border border-[#F3D9BC] bg-amber-tint p-4">
+          <p className="text-[15px] font-bold text-zinc-900">
             This will throw away and rebuild:
           </p>
           <ul className="mt-2 space-y-1 text-sm leading-6 text-zinc-600">
@@ -1372,17 +1536,22 @@ function RedoBox({
             generated and nothing is charged until you approve a row in the ideas table.
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <Button onClick={go} disabled={working}>
+            <Button className="px-5 py-2.5 text-sm" onClick={go} disabled={working}>
               {working ? 'Sending it back…' : 'Yes, do it again'}
             </Button>
-            <Button variant="ghost" onClick={() => setEffects(null)} disabled={working}>
+            <Button
+              variant="ghost"
+              className="px-5 py-2.5 text-sm"
+              onClick={() => setEffects(null)}
+              disabled={working}
+            >
               Leave it alone
             </Button>
           </div>
         </div>
       ) : (
         <div className="mt-3">
-          <Button variant="ghost" onClick={check} disabled={busy || checking}>
+          <Button variant="ghost" className="px-5 py-2.5 text-sm" onClick={check} disabled={busy || checking}>
             {checking ? 'Checking…' : busy ? 'Wait for it to stop first' : 'Do this step again'}
           </Button>
         </div>
@@ -1413,37 +1582,37 @@ function LiveStrip({
 }) {
   const { kind, headline, detail, clock } = status;
   const moving = kind === 'working' || kind === 'waiting-for-mac';
-  const tone = kind === 'stopped' ? 'border-l-red-600 bg-red-50'
-    : kind === 'finished' ? 'border-l-emerald-600 bg-emerald-50'
-      : kind === 'waiting-for-you' ? 'border-l-amber-500 bg-amber-50'
-        : 'border-l-accent bg-zinc-50';
-  const dot = kind === 'stopped' ? 'bg-red-600'
-    : kind === 'finished' ? 'bg-emerald-600'
-      : kind === 'waiting-for-you' ? 'bg-amber-500'
-        : 'bg-accent';
+  // Teal is "your turn" and "done" everywhere on this screen, as it is on the
+  // step that waits for approval; blue is work in motion.
+  const tone = kind === 'stopped' ? 'border-[#F6D6BE] bg-[#FDF3EC]'
+    : kind === 'finished' || kind === 'waiting-for-you' ? 'border-teal-line bg-teal-tint'
+      : 'border-[#D6E8FB] bg-accent-tint';
+  const dot = kind === 'stopped' ? 'bg-[#C2410C]'
+    : kind === 'finished' || kind === 'waiting-for-you' ? 'bg-teal'
+      : 'bg-accent';
 
   return (
-    <div className={`mt-4 border-2 border-l-8 border-zinc-900 px-4 py-3 ${tone}`}>
+    <div className={`mt-5 rounded-[14px] border px-[18px] py-3.5 ${tone}`}>
       <div className="flex items-center gap-3">
         <span
-          className={`size-3 shrink-0 ${dot} ${moving ? 'animate-pulse' : ''}`}
+          className={`size-2.5 shrink-0 rounded-full ${dot} ${moving ? 'animate-pulse' : ''}`}
           aria-hidden
         />
-        <p className="font-display text-lg font-bold tracking-[-0.02em] text-zinc-900">
+        <p className="text-[15px] font-bold tracking-[-0.01em] text-zinc-900">
           {headline}
         </p>
         {clock ? (
           // Aria-live so the one fact that matters is spoken as it changes,
           // rather than only being visible.
-          <p className="ml-auto text-sm font-semibold text-zinc-500" aria-live="polite">
+          <p className="ml-auto text-[13px] font-semibold text-zinc-500 tabular-nums" aria-live="polite">
             {clock}
           </p>
         ) : null}
       </div>
-      <p className="mt-1.5 text-base leading-relaxed text-zinc-600">{detail}</p>
+      <p className="mt-1 pl-[22px] text-sm leading-relaxed text-zinc-600">{detail}</p>
       {kind === 'stopped' && onCarryOn ? (
-        <div className="mt-3">
-          <Button onClick={() => { void onCarryOn(); }}>Carry on</Button>
+        <div className="mt-3 pl-[22px]">
+          <Button className="px-5 py-2.5 text-sm" onClick={() => { void onCarryOn(); }}>Carry on</Button>
         </div>
       ) : null}
     </div>
@@ -1451,22 +1620,39 @@ function LiveStrip({
 }
 
 /**
- * Square, not round, and blue rather than green when it is done — both the
- * comp's. It spends its one accent colour on "this finished", which is the
- * thing anybody watching this screen is looking for.
+ * The 26px circle on each step. Blue and ticked when it is done, a blue ring
+ * turning while it runs, teal with a beating dot when it is waiting on the
+ * operator, and an empty grey ring for what has not started.
+ *
+ * The ring only turns while something is genuinely driving the campaign. A
+ * spinner on a stalled run is the same lie the status strip exists to stop.
  */
-function Bullet({ state, spinning }: { state: StepState; spinning: boolean }) {
-  const base = 'mt-1 flex size-6 shrink-0 items-center justify-center text-sm font-bold';
-  if (state === 'done') return <span className={`${base} bg-accent text-white`}>✓</span>;
-  if (state === 'failed') return <span className={`${base} bg-red-600 text-white`}>!</span>;
-  if (state === 'active') {
+function Bullet({
+  state, waiting, spinning,
+}: { state: StepState; waiting: boolean; spinning: boolean }) {
+  const base = 'flex size-[26px] shrink-0 items-center justify-center rounded-full border-2 '
+    + 'text-xs font-extrabold text-white transition-all duration-[400ms]';
+  if (waiting) {
     return (
-      <span className={`${base} bg-zinc-900 text-white`}>
-        <span className={spinning ? 'animate-pulse' : undefined}>•</span>
+      <span className={`${base} border-teal bg-teal`}>
+        <span className="size-2 animate-pulse rounded-full bg-white" />
       </span>
     );
   }
-  return <span className={`${base} bg-zinc-200 text-zinc-400`}>·</span>;
+  if (state === 'done') return <span className={`${base} border-accent bg-accent`}>✓</span>;
+  if (state === 'failed') return <span className={`${base} border-[#C2410C] bg-[#C2410C]`}>!</span>;
+  if (state === 'active') {
+    return (
+      <span className={`${base} border-accent bg-white`}>
+        <span
+          className={`size-2.5 rounded-full border-2 border-accent border-t-transparent ${
+            spinning ? 'animate-spin [animation-duration:.8s]' : ''
+          }`}
+        />
+      </span>
+    );
+  }
+  return <span className={`${base} border-zinc-300 bg-white`} />;
 }
 
 /**
@@ -1477,12 +1663,18 @@ function Bullet({ state, spinning }: { state: StepState; spinning: boolean }) {
  * for a minute — approving a version you are not looking at is the exact failure
  * this gate exists to prevent — and reasons 4 to 10 are the thing being
  * approved, so they have to be readable without leaving the screen.
+ *
+ * Drawn as a small copy of the page itself — offer bar, headline, reasons,
+ * proof — because that is what is being approved, and a form of labelled
+ * fields reads like a database row rather than like the thing a buyer will see.
  */
 function BasePageReview({
-  page, slug, target, lastGuidance, foundPhotos, onDecide,
+  page, slug, host, target, lastGuidance, foundPhotos, onDecide,
 }: {
   page: BasePageView;
   slug: string;
+  /** The shop's address, as the page preview's small print. */
+  host: string | null;
   /** How many pages this campaign is writing. Five for a vehicle. */
   target: number;
   lastGuidance: string | null;
@@ -1490,6 +1682,10 @@ function BasePageReview({
   onDecide: (action: 'approve' | 'rewrite', guidance?: string) => Promise<void>;
 }) {
   const [guidance, setGuidance] = useState('');
+  // "Edit the words first" opens the note. The words are rewritten against it
+  // rather than edited in place: the page is written as a whole, and a hand
+  // edit to reason 6 would not reach the nineteen pages built from it.
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<null | 'approve' | 'rewrite'>(null);
   const [error, setError] = useState<string | null>(null);
   const testimonials = page.testimonials ?? [];
@@ -1506,105 +1702,85 @@ function BasePageReview({
   }
 
   return (
-    <div className="mt-6">
-      <Card>
-        <h2 className="text-xl font-bold">Read this before the {target}</h2>
-        <p className="mt-1 text-sm leading-6 text-zinc-500">
-          Reasons 4 to 10 below are copied onto every one of the {target} pages,
-          word for word. Only the headline and reasons 1 to 3 change per buyer. So if
-          something here is wrong, it is wrong {target} times — this is the cheap
-          place to catch it.
+    <div className="animate-rise flex flex-col gap-4">
+      <div>
+        <p className={EYEBROW}>Your approval needed</p>
+        <h2 className="mt-1 text-[22px] leading-tight tracking-[-0.02em]">
+          The main page, written for the broadest buyer
+        </h2>
+        <p className="mt-1.5 text-[13px] leading-normal text-zinc-500">
+          Seven of its ten reasons go onto all {target} pages unchanged.
         </p>
+      </div>
+      <p className="text-sm leading-relaxed text-zinc-500">
+        Reasons 4 to 10 below are copied onto every one of the {target} pages,
+        word for word. Only the headline and reasons 1 to 3 change per buyer. So if
+        something here is wrong, it is wrong {target} times — this is the cheap
+        place to catch it.
+      </p>
 
-        {lastGuidance ? (
-          <p className="mt-3 rounded-[var(--radius-brand-card)] bg-zinc-100 px-4 py-3 text-sm text-zinc-600">
-            Rewritten with your note: “{lastGuidance}”
-          </p>
-        ) : null}
+      {lastGuidance ? (
+        <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
+          Rewritten with your note: “{lastGuidance}”
+        </p>
+      ) : null}
 
-        {!testimonials.length ? (
-          <div className="mt-4">
-            <Callout tone="warn" title="No customer reviews were found">
-              Every one of the {target} pages will ship with no proof section. If the
-              product page has reviews on it, send this back, then point the campaign at that
-              page rather than the home page.
-            </Callout>
-          </div>
-        ) : null}
-
-        {/* The pictures have deliberately not been chosen yet — the words are what
-            is being approved here. Showing what WILL be available, and where it
-            will go, is the difference between "this page is bare" and "this page
-            is not finished yet". The first run shipped without either. */}
-        <div className="mt-4">
-          {foundPhotos.length ? (
-            <Callout tone="info" title={`${foundPhotos.length} photos found on your site`}>
-              <p>
-                Nothing has been placed yet. Approve this page and each of the ten reasons
-                below gets the photo that genuinely shows what it claims — a reason none of
-                them fits keeps its empty slot rather than borrowing an unrelated picture.
-                No pictures are generated and nothing is charged.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {foundPhotos.slice(0, 16).map((url) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={url}
-                    src={url}
-                    alt=""
-                    loading="lazy"
-                    className="size-14 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
-                  />
-                ))}
-              </div>
-            </Callout>
-          ) : (
-            <Callout tone="warn" title="No photos were found on your page">
-              All {target} pages will be text only. Nothing here invents a picture, so
-              if the pages need images, point the campaign at a page that has product photos
-              on it.
-            </Callout>
-          )}
+      <article className="overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-[0_20px_40px_-30px_rgba(6,22,46,.4)]">
+        <div className="bg-navy px-5 py-[9px] text-center text-xs font-bold uppercase tracking-[0.06em] text-white">
+          {page.offer_headline}
         </div>
-
-        <div className="mt-6 space-y-5 border-t border-zinc-200 pt-6">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">Headline</p>
-            <p className="mt-1 text-lg font-bold text-zinc-900">{page.hero_headline}</p>
-            {page.hero_subheadline
-              ? <p className="mt-1 text-sm leading-6 text-zinc-600">{page.hero_subheadline}</p>
-              : null}
+        <div className="flex flex-col gap-[18px] px-5 py-6 sm:px-7 sm:py-[26px]">
+          <div className="grid items-start gap-[22px] sm:grid-cols-[minmax(0,1fr)_200px]">
+            <div className="flex flex-col gap-2.5">
+              {host ? (
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-zinc-400">{host}</p>
+              ) : null}
+              <p className="text-[28px] font-extrabold leading-[1.12] tracking-[-0.03em] text-zinc-900 [text-wrap:pretty]">
+                {page.hero_headline}
+              </p>
+              {page.hero_subheadline ? (
+                <p className="text-sm leading-[1.55] text-zinc-500">{page.hero_subheadline}</p>
+              ) : null}
+            </div>
+            {page.hero_image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={page.hero_image_url}
+                alt=""
+                className="aspect-square w-full rounded-xl object-cover"
+              />
+            ) : (
+              // The pictures have not been chosen yet — that happens after
+              // approval — so the slot is shown as a slot.
+              <div className="flex aspect-square items-center justify-center rounded-xl bg-[#EEF2F6] p-3 text-center text-xs text-zinc-400">
+                Photo from your product page
+              </div>
+            )}
           </div>
 
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">
-              The ten reasons
+          <div className="flex flex-col gap-2.5">
+            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-zinc-400">
+              {page.reasons.length === 10 ? 'Ten reasons to buy' : `${page.reasons.length} reasons to buy`}
             </p>
-            <ol className="mt-2 space-y-3">
+            <ol className="grid gap-x-[22px] gap-y-3.5 sm:grid-cols-2">
               {page.reasons.map((r) => (
-                <li key={r.number} className="flex gap-3">
-                  <span
-                    className={`mt-0.5 w-6 shrink-0 text-sm font-bold ${
-                      r.number <= 3 ? 'text-zinc-400' : 'text-zinc-900'
-                    }`}
-                  >
-                    {r.number}
+                <li key={r.number} className="flex gap-2.5 text-sm leading-[1.45]">
+                  <span className="shrink-0 font-extrabold text-accent tabular-nums">
+                    {String(r.number).padStart(2, '0')}
                   </span>
                   <div className="min-w-0">
-                    <p className="font-semibold text-zinc-900">
-                      {r.title}
-                      {r.number <= 3 ? (
-                        <span className="ml-2 align-middle text-xs font-bold uppercase tracking-wide text-zinc-400">
-                          swapped per buyer
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="mt-0.5 text-sm leading-6 text-zinc-600">{r.body}</p>
+                    <p className="font-bold text-zinc-900">{r.title}</p>
+                    {r.number <= 3 ? (
+                      <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-400">
+                        Swapped per buyer
+                      </p>
+                    ) : null}
+                    <p className="mt-0.5 text-[13px] leading-normal text-zinc-500">{r.body}</p>
                     {/* The slot, named. What goes here is decided after approval,
                         so what is shown is what the copy says it should be. */}
                     {r.image_prompt?.trim() ? (
-                      <p className="mt-2 rounded-[var(--radius-brand-card)] border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500">
-                        <span className="font-bold uppercase tracking-wide text-zinc-400">
+                      <p className="mt-1.5 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2.5 py-1.5 text-[11px] leading-[1.45] text-zinc-500">
+                        <span className="font-bold uppercase tracking-[0.1em] text-zinc-400">
                           Picture slot ·{' '}
                         </span>
                         {r.image_prompt}
@@ -1617,35 +1793,68 @@ function BasePageReview({
           </div>
 
           {testimonials.length ? (
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">
-                Real reviews used as proof
-              </p>
-              <ul className="mt-2 space-y-2">
+            <div className="flex items-start gap-3.5 rounded-xl bg-zinc-50 px-4 py-3.5">
+              <span className="text-[26px] font-extrabold leading-none text-teal" aria-hidden>“</span>
+              <div className="min-w-0 flex-1 space-y-2.5 text-sm leading-normal text-zinc-900">
                 {testimonials.map((t) => (
-                  <li key={t.quote} className="border-l-2 border-zinc-300 pl-3 text-sm leading-6 text-zinc-600">
-                    “{t.quote}”
+                  <p key={t.quote}>
+                    {t.quote}
                     {t.reviewer ? <span className="text-zinc-400"> — {t.reviewer}</span> : null}
-                  </li>
+                  </p>
                 ))}
-              </ul>
+                <p className="text-xs text-zinc-400">Real reviews used as proof, pulled from the product page</p>
+              </div>
             </div>
           ) : null}
 
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">The offer</p>
-            <p className="mt-1 font-semibold text-zinc-900">{page.offer_headline}</p>
+          <div className="flex flex-col gap-1 border-t border-zinc-200 pt-4">
+            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-zinc-400">The offer</p>
+            <p className="font-bold text-zinc-900">{page.offer_headline}</p>
             {page.offer_body
-              ? <p className="mt-0.5 text-sm leading-6 text-zinc-600">{page.offer_body}</p>
+              ? <p className="text-sm leading-6 text-zinc-600">{page.offer_body}</p>
               : null}
-            <p className="mt-2 text-sm text-zinc-500">
+            <p className="mt-1 text-[13px] text-zinc-500">
               Button reads “{page.cta_button_text}” and goes to{' '}
               <span className="break-all font-mono text-xs">{page.cta_url}</span>
             </p>
           </div>
         </div>
+      </article>
 
-        <div className="mt-6 border-t border-zinc-200 pt-6">
+      {error ? <Callout tone="error" title="That did not go through">{error}</Callout> : null}
+
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <Button
+          className="px-7 py-4 font-extrabold"
+          onClick={() => run('approve')}
+          disabled={busy !== null}
+        >
+          {busy === 'approve'
+            ? 'Starting the pages…'
+            : <>Approve the main page <span aria-hidden>→</span></>}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setEditing((e) => !e)}
+          aria-expanded={editing}
+          disabled={busy !== null}
+          className="px-1.5 py-3 text-sm font-bold text-zinc-500 underline underline-offset-[3px] hover:text-zinc-900 disabled:opacity-40"
+        >
+          {editing ? 'Not now' : 'Edit the words first'}
+        </button>
+        <a
+          href={`/p/${slug}`}
+          target="_blank"
+          rel="noopener"
+          className="px-1.5 py-3 text-sm font-semibold text-zinc-500 hover:text-zinc-900"
+        >
+          See it as a page ↗
+        </a>
+        <p className="text-[13px] text-zinc-500 sm:ml-auto">Nothing else runs until you approve.</p>
+      </div>
+
+      {editing ? (
+        <div className="animate-rise rounded-2xl border border-zinc-200 bg-zinc-50 p-5">
           <Field
             label="Something to change?"
             help="Leave this empty to approve it as written. Fill it in and send it back, and the
@@ -1659,37 +1868,58 @@ function BasePageReview({
               placeholder="e.g. reason 6 is about delivery times we do not promise — drop it"
             />
           </Field>
-
-          {error ? (
-            <div className="mt-4">
-              <Callout tone="error" title="That did not go through">{error}</Callout>
-            </div>
-          ) : null}
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button onClick={() => run('approve')} disabled={busy !== null}>
-              {busy === 'approve'
-                ? 'Starting the pages…'
-                : `Approve and write the ${target} pages`}
-            </Button>
+          <div className="mt-4">
             <Button variant="ghost" onClick={() => run('rewrite')} disabled={busy !== null}>
               {busy === 'rewrite' ? 'Writing it again…' : 'Send it back'}
             </Button>
-            <a
-              href={`/p/${slug}`}
-              target="_blank"
-              rel="noopener"
-              className="text-sm font-semibold text-zinc-500 underline hover:text-zinc-900"
-            >
-              See it as a page
-            </a>
           </div>
           <p className="mt-3 text-xs text-zinc-400">
             Sending it back throws this version away and writes a new one. Nothing else has been
             written yet, so it costs one page, not {target}.
           </p>
         </div>
-      </Card>
+      ) : null}
+
+      {!testimonials.length ? (
+        <Callout tone="warn" title="No customer reviews were found">
+          Every one of the {target} pages will ship with no proof section. If the
+          product page has reviews on it, send this back, then point the campaign at that
+          page rather than the home page.
+        </Callout>
+      ) : null}
+
+      {/* The pictures have deliberately not been chosen yet — the words are what
+          is being approved here. Showing what WILL be available, and where it
+          will go, is the difference between "this page is bare" and "this page
+          is not finished yet". The first run shipped without either. */}
+      {foundPhotos.length ? (
+        <Callout tone="info" title={`${plural(foundPhotos.length, 'photo')} found on your site`}>
+          <p>
+            Nothing has been placed yet. Approve this page and each of the ten reasons
+            above gets the photo that genuinely shows what it claims — a reason none of
+            them fits keeps its empty slot rather than borrowing an unrelated picture.
+            No pictures are generated and nothing is charged.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {foundPhotos.slice(0, 16).map((url) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={url}
+                src={url}
+                alt=""
+                loading="lazy"
+                className="size-14 rounded-lg border border-zinc-200 object-cover"
+              />
+            ))}
+          </div>
+        </Callout>
+      ) : (
+        <Callout tone="warn" title="No photos were found on your page">
+          All {target} pages will be text only. Nothing here invents a picture, so
+          if the pages need images, point the campaign at a page that has product photos
+          on it.
+        </Callout>
+      )}
     </div>
   );
 }
@@ -1708,63 +1938,56 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
     .filter((g) => g.items.length);
 
   return (
-    <div className="mt-6">
+    <div className="mt-10">
       <Card>
-        <h2 className="text-xl font-bold">
+        <p className={EYEBROW}>Studied from Meta&rsquo;s ad library</p>
+        <h2 className="mt-1 text-[22px] leading-tight tracking-[-0.02em]">
           {formats.length} format{formats.length === 1 ? ' that keeps' : 's that keep'} working
         </h2>
-        <p className="mt-1 text-sm text-zinc-500">
-          Read from {scan.adsQualified.toLocaleString()} ads that have been live between three
-          months and a year. Run time is the only performance signal Meta publishes for
-          commercial ads — no impressions, no spend — so an ad that has been live a full quarter
-          is live because it pays for itself. Past a year it is usually just always-on, so those
-          are left out.
+        <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+          Read from <span className="tabular-nums">{scan.adsQualified.toLocaleString()}</span> ads
+          that have been live between three months and a year. Run time is the only performance
+          signal Meta publishes for commercial ads — no impressions, no spend — so an ad that has
+          been live a full quarter is live because it pays for itself. Past a year it is usually
+          just always-on, so those are left out.
         </p>
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="mt-2 text-sm leading-relaxed text-zinc-500">
           {/* The rule the whole design rests on, said where the operator can see
               it, because "you are not copying anyone" is the reassurance this
               screen most needs to give. */}
-          What was kept is the <span className="font-semibold text-zinc-700">shape</span> of these
+          What was kept is the <span className="font-semibold text-zinc-900">shape</span> of these
           ads, never their words. Nothing an advertiser wrote travels past this screen.
         </p>
 
         {byMedia.map((group) => (
           <div key={group.media} className="mt-6">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-              {group.media === 'image' ? 'Statics' : 'Video'}
-            </h3>
-            <ul className="mt-3 space-y-4">
+            <h3 className={MICRO}>{group.media === 'image' ? 'Statics' : 'Video'}</h3>
+            <ul className="mt-3 grid gap-3 md:grid-cols-2">
               {group.items.map((f) => (
-                <li key={f.id} className="rounded-[var(--radius-brand-card)] border border-zinc-200 p-4">
+                <li key={f.id} className="rounded-[14px] border border-zinc-200 bg-white p-4">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                    <p className="font-semibold text-zinc-900">{f.format_name}</p>
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-[15px] font-bold text-zinc-900">{f.format_name}</p>
+                    <p className="text-xs text-zinc-500 tabular-nums">
                       seen in {f.observed_count} ad{f.observed_count === 1 ? '' : 's'}
                       {f.median_days_running != null
                         ? ` · running ${f.median_days_running} days on average` : ''}
                     </p>
                   </div>
-                  <p className="mt-2 text-sm text-zinc-600">{f.description}</p>
+                  <p className="mt-2 text-sm leading-relaxed text-zinc-600">{f.description}</p>
 
                   <dl className="mt-3 space-y-2 text-sm">
                     <div>
-                      <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                        How it opens
-                      </dt>
-                      <dd className="text-zinc-700">{f.hook_pattern}</dd>
+                      <dt className={MICRO}>How it opens</dt>
+                      <dd className="mt-0.5 text-zinc-600">{f.hook_pattern}</dd>
                     </div>
                     <div>
-                      <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                        What is on screen
-                      </dt>
-                      <dd className="text-zinc-700">{f.visual_recipe}</dd>
+                      <dt className={MICRO}>What is on screen</dt>
+                      <dd className="mt-0.5 text-zinc-600">{f.visual_recipe}</dd>
                     </div>
                     {f.offer_placement ? (
                       <div>
-                        <dt className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                          Where the offer sits
-                        </dt>
-                        <dd className="text-zinc-700">{f.offer_placement}</dd>
+                        <dt className={MICRO}>Where the offer sits</dt>
+                        <dd className="mt-0.5 text-zinc-600">{f.offer_placement}</dd>
                       </div>
                     ) : null}
                   </dl>
@@ -1794,10 +2017,11 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
     <div className="mt-6">
       <details className="group">
         <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
-          See the {scan.adsQualified.toLocaleString()} ads these came from
+          See the <span className="tabular-nums">{scan.adsQualified.toLocaleString()}</span> ads these
+          came from
         </summary>
         <Card className="mt-3">
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm leading-relaxed text-zinc-500">
             Every ad here is live now and has been for between 90 days and a year.
             {scan.adsFound > scan.adsQualified ? (
               <> Another {(scan.adsFound - scan.adsQualified).toLocaleString()} were read and did
@@ -1810,21 +2034,21 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
             ) : null}
           </p>
           {scan.terms.length ? (
-            <p className="mt-2 text-sm text-zinc-500">
+            <p className="mt-2 text-sm leading-relaxed text-zinc-500">
               Searched for: {scan.terms.map((t) => `“${t}”`).join(', ')}. These are phrases that
               turn up inside direct-response ads whatever they sell — the scan is looking for
               structure, not for your competitors.
             </p>
           ) : null}
 
-          <ul className="mt-5 divide-y divide-zinc-200 border-t border-zinc-200">
+          <ul className="mt-5 divide-y divide-[#EEF1F5] border-t border-zinc-200">
             {ads.map((ad) => (
               <li key={ad.id} className="py-4">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <p className="font-semibold text-zinc-900">
+                  <p className="text-[15px] font-bold text-zinc-900">
                     {ad.advertiser_name ?? 'Advertiser not named on the card'}
                   </p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-zinc-500 tabular-nums">
                     {ad.region} · {ad.media_type === 'image' ? 'static' : 'video'}
                     {ad.days_running != null ? ` · ${ad.days_running} days` : ''}
                     {ad.variant_count && ad.variant_count > 1
@@ -1832,7 +2056,7 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
                   </p>
                 </div>
                 {ad.headline ? (
-                  <p className="mt-1 text-sm font-medium text-zinc-800">{ad.headline}</p>
+                  <p className="mt-1 text-sm font-semibold text-zinc-900">{ad.headline}</p>
                 ) : null}
                 {ad.primary_text ? (
                   <p className="mt-1 line-clamp-3 text-sm text-zinc-600">{ad.primary_text}</p>
@@ -1843,7 +2067,7 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
                     href={`https://www.facebook.com/ads/library/?id=${ad.meta_ad_id}`}
                     target="_blank"
                     rel="noopener"
-                    className="underline hover:text-zinc-700"
+                    className="underline underline-offset-[3px] hover:text-zinc-900"
                   >
                     See it in Meta&rsquo;s library
                   </a>
@@ -1859,37 +2083,39 @@ function ScannedAds({ ads, scan }: { ads: ScannedAd[]; scan: ScanSummary }) {
 
 function Leads({ leads }: { leads: Lead[] }) {
   return (
-    <div className="mt-6">
+    <div className="mt-12">
       <Card>
-        <h2 className="text-xl font-bold">
-          {leads.length} enquir{leads.length === 1 ? 'y' : 'ies'}
+        <p className={EYEBROW}>From the live pages</p>
+        <h2 className="mt-1 text-[22px] leading-tight tracking-[-0.02em]">
+          <span className="tabular-nums">{leads.length}</span> enquir{leads.length === 1 ? 'y' : 'ies'}
         </h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-2 text-sm leading-relaxed text-zinc-500">
           From the form on the live pages. The page each one was reading is named, because
           that is what tells you which angle is doing the work.
         </p>
 
-        <ul className="mt-6 divide-y divide-zinc-200 border-t border-zinc-200">
+        <ul className="mt-6 divide-y divide-[#EEF1F5] border-t border-zinc-200">
           {leads.map((l) => (
             <li key={l.id} className="py-4">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <p className="font-semibold text-zinc-900">{l.name}</p>
-                <a href={`tel:${l.phone.replace(/[^\d+]/g, '')}`} className="text-zinc-700 underline">
+                <p className="text-[15px] font-bold text-zinc-900">{l.name}</p>
+                <a
+                  href={`tel:${l.phone.replace(/[^\d+]/g, '')}`}
+                  className="font-semibold text-accent underline underline-offset-[3px] tabular-nums"
+                >
                   {l.phone}
                 </a>
                 {l.email ? <span className="text-sm text-zinc-500">{l.email}</span> : null}
-                <span className="ml-auto text-xs text-zinc-400">
+                <span className="ml-auto text-xs text-zinc-400 tabular-nums">
                   {new Date(l.created_at).toLocaleString()}
                 </span>
               </div>
               {l.message ? (
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-zinc-600">
                   {l.message}
                 </p>
               ) : null}
-              <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                {l.persona_name ?? 'the main page'}
-              </p>
+              <p className={`${MICRO} mt-2`}>{l.persona_name ?? 'the main page'}</p>
             </li>
           ))}
         </ul>
@@ -1898,69 +2124,127 @@ function Leads({ leads }: { leads: Lead[] }) {
   );
 }
 
+/**
+ * The buyers, as their pages are written.
+ *
+ * One card per page, arriving as the database gains them rather than on a
+ * timer — the poll brings each new row, and the card animates in when it
+ * mounts. Keyed by slug so a card that already arrived never animates twice.
+ */
 function LivePages({
-  campaign, personas, target,
-}: { campaign: { slug: string }; personas: Persona[]; target: number }) {
+  slug, personas, target, live, eyebrow, title, note,
+}: {
+  slug: string;
+  personas: Persona[];
+  target: number;
+  /** The run has got past the pages. Before that the list is still growing. */
+  live: boolean;
+  eyebrow: string;
+  title: string;
+  note: string;
+}) {
   const allLinks = personas.map((p) => p.url).join('\n');
   return (
-    <div className="mt-6">
-      <Card>
-        <div className="flex items-baseline justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-bold">Your {personas.length} pages</h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Each link is a real page, live right now. Put one link in one ad, so you find out
-              which buyer responds.
-            </p>
-          </div>
-          <CopyButton text={allLinks} label="Copy all" />
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div>
+          <p className={EYEBROW}>{eyebrow}</p>
+          <h2 className="mt-1 text-[22px] leading-tight tracking-[-0.02em]">{title}</h2>
         </div>
+        <div className="flex items-center gap-3">
+          <p className="text-[13px] text-zinc-500">{note}</p>
+          {live ? <CopyButton text={allLinks} label="Copy all" /> : null}
+        </div>
+      </div>
+      {live ? (
+        <p className="text-sm leading-relaxed text-zinc-500">
+          Each link is a real page, live right now. Put one link in one ad, so you find out
+          which buyer responds.
+        </p>
+      ) : null}
 
-        <ul className="mt-6 divide-y divide-zinc-200 border-t border-zinc-200">
-          {personas.map((p) => (
-            <li key={p.slug} className="flex items-start gap-4 py-4">
-              <span className="w-6 shrink-0 pt-0.5 text-sm font-bold text-zinc-400">
-                {p.persona_index}
+      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-4">
+        {personas.map((p, i) => (
+          <li
+            key={p.slug}
+            className="animate-card-in flex min-w-0 flex-col gap-1.5 rounded-xl border border-zinc-300 bg-white p-3.5"
+            style={{ animationDelay: `${Math.min(i, 12) * 40}ms` }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-bold tracking-[0.1em] text-accent tabular-nums">
+                {String(p.persona_index).padStart(2, '0')}
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-zinc-900">{p.persona_name}</p>
-                <p className="mt-0.5 text-sm text-zinc-500">{p.angle_hook}</p>
-                <a
-                  href={p.url}
-                  target="_blank"
-                  rel="noopener"
-                  className="mt-1 block truncate text-sm text-zinc-400 underline hover:text-zinc-900"
-                >
-                  {p.url}
-                </a>
-              </div>
+              {/* The design tags each buyer Wants / Fears / Needs. Nothing on a
+                  persona row says which, so the chip carries the one thing a
+                  page does record about itself: whether anybody has come. */}
+              <span className="whitespace-nowrap rounded-full bg-zinc-100 px-[7px] py-0.5 text-[10px] font-bold text-zinc-500 tabular-nums">
+                {plural(p.views_count, 'view')}
+                {p.clicks_count ? ` · ${plural(p.clicks_count, 'click')}` : ''}
+              </span>
+            </div>
+            <p className="text-sm font-bold leading-[1.3] text-zinc-900">{p.persona_name}</p>
+            <p className="text-xs leading-[1.45] text-zinc-500">{p.primary_pain_point || p.angle_hook}</p>
+            <a
+              href={p.url}
+              target="_blank"
+              rel="noopener"
+              title={p.url}
+              className="mt-auto truncate pt-0.5 font-mono text-[11px] text-zinc-400 hover:text-accent"
+            >
+              /p/{slug}/{p.slug}
+            </a>
+            <div className="pt-1">
               <CopyButton text={p.url} />
-            </li>
-          ))}
-        </ul>
+            </div>
+          </li>
+        ))}
+      </ul>
 
-        {personas.length < target ? (
-          <div className="mt-6">
-            <Callout tone="warn">
-              {personas.length} pages, not {target}. The run stopped early rather than
-              ship near-identical pages — it may not support {target} genuinely
-              different buyers.
-            </Callout>
-          </div>
-        ) : null}
+      {live && personas.length < target ? (
+        <Callout tone="warn">
+          {personas.length} pages, not {target}. The run stopped early rather than
+          ship near-identical pages — it may not support {target} genuinely
+          different buyers.
+        </Callout>
+      ) : null}
 
-        <div className="mt-6">
-          <Callout tone="info" title="What these are for">
-            Each page is the destination of that buyer&rsquo;s ads — the ideas table above points
-            every one of them here by default. The view and click counts start the moment
-            somebody lands, so the pages tell you which angle is working even before an ad
-            is made.
-          </Callout>
-        </div>
-      </Card>
-      <p className="mt-3 text-sm text-zinc-500">
-        Campaign address: <code className="font-mono">/p/{campaign.slug}/…</code>
+      {live ? (
+        <Callout tone="info" title="What these are for">
+          Each page is the destination of that buyer&rsquo;s ads — the ideas table below points
+          every one of them here by default. The view and click counts start the moment
+          somebody lands, so the pages tell you which angle is working even before an ad
+          is made.
+        </Callout>
+      ) : null}
+
+      <p className="text-[13px] text-zinc-500">
+        Campaign address: <code className="font-mono text-xs">/p/{slug}/…</code>
       </p>
+    </div>
+  );
+}
+
+/**
+ * The right-hand column before it has anything of its own: before the main
+ * page exists, and between approving it and the first buyer's page landing.
+ */
+function Upcoming({ approved, target }: { approved: boolean; target: number }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <p className={EYEBROW}>{approved ? 'Going live' : 'Coming up'}</p>
+        <h2 className="mt-1 text-[22px] leading-tight tracking-[-0.02em]">
+          {approved ? `0 of ${target} buyers written` : 'The main page, for you to approve'}
+        </h2>
+      </div>
+      <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm leading-relaxed text-zinc-400">
+        <p className="max-w-[340px]">
+          {approved
+            ? 'Each buyer’s page appears here the moment it is written, on its own address.'
+            : `It appears here as soon as it is written. Nothing is written for the ${target} `
+              + 'buyers until you have read it and approved it.'}
+        </p>
+      </div>
     </div>
   );
 }
@@ -1977,30 +2261,24 @@ function LivePages({
  * Editing is inline and covers every field that gets pasted into Ads Manager.
  * These are not suggestions to be taken or left — they are drafts, and the last
  * word on the wording belongs to the person whose product it is.
+ *
+ * One row per idea, in the order the server sends them, which is already buyer
+ * order. A row carries the six things decided from it at a glance; everything
+ * else about it — the full words, the instruction, the files, the history —
+ * opens underneath it.
  */
 function Ideas({
-  ideas, spend, onAction, onMakePictures,
+  ideas, spend, stillWriting, onAction, onMakePictures,
 }: {
   ideas: AdIdea[];
   spend: Spend;
+  /** The writing stage is still adding rows. */
+  stillWriting: boolean;
   onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }>;
   onMakePictures: () => Promise<void>;
 }) {
   const [drawingAll, setDrawingAll] = useState(false);
-  // Grouped in the order they arrive, which the server has already put in buyer
-  // order. Rebuilding the order here would be a second opinion about it.
-  const groups: { personaId: string; name: string; items: AdIdea[] }[] = [];
-  for (const idea of ideas) {
-    const last = groups[groups.length - 1];
-    if (last && last.personaId === idea.persona_id) last.items.push(idea);
-    else {
-      groups.push({
-        personaId: idea.persona_id,
-        name: idea.persona_name ?? 'a buyer whose page has since gone',
-        items: [idea],
-      });
-    }
-  }
+  const buyers = new Set(ideas.map((i) => i.persona_id)).size;
 
   const waiting = ideas.filter((i) => i.status === 'draft');
   const made = ideas.filter((i) => i.status === 'generated');
@@ -2013,135 +2291,168 @@ function Ideas({
   const undrawn = waiting.filter((i) => !i.source_image_url && i.generated_image_prompt);
   const drawAllUsd = undrawn.length * PICTURE_USD;
 
-  return (
-    <div className="mt-6">
-      <Card>
-        <h2 className="text-xl font-bold">
-          {ideas.length} ad idea{ideas.length === 1 ? '' : 's'}
-        </h2>
-        <p className="mt-1 text-sm leading-6 text-zinc-500">
-          Each one is built on one of the formats below and points at that buyer&rsquo;s own
-          page. Every field can be rewritten before you approve it — these get pasted into Ads
-          Manager by you, so the wording is yours.
-        </p>
-        <p className="mt-2 text-sm leading-6 text-zinc-500">
-          <span className="font-semibold text-zinc-700">Nothing is made and nothing is
-            charged</span>{' '}
-          until you press a button on a row. Two of them spend: Approve, and{' '}
-          <span className="font-semibold text-zinc-700">Make the picture</span> on a row that has
-          no photograph — {money(PICTURE_USD)}, so you can look at the picture before you decide
-          rather than after.
-        </p>
+  // Read off the rows rather than assumed: the estimate is the row's, and a
+  // campaign with no video ideas has no video price worth quoting.
+  const videoIdea = ideas.find((i) => i.media_type === 'video');
+  const videoUsd = videoIdea ? Number(videoIdea.est_usd) : null;
+  const spentPct = spend.ceiling > 0 ? Math.min(100, (spend.total / spend.ceiling) * 100) : 0;
 
-        {/* The queue that blocks every other decision. A row with no picture
-            has nothing on it to judge, so telling the operator how many of
-            those there are is more use than any other number on this screen. */}
-        {undrawn.length ? (
-          <div className="mt-4 rounded-[var(--radius-brand-card)] bg-zinc-50 p-4 ring-1 ring-zinc-200">
-            <p className="text-sm font-semibold text-zinc-800">
+  return (
+    <section className="mt-16 flex flex-col gap-5 sm:mt-20">
+      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-6">
+        <div className="flex max-w-[780px] flex-col gap-2">
+          <p className={EYEBROW}>
+            {stillWriting ? 'Writing your ad ideas' : 'Your ad ideas are waiting for you'}
+          </p>
+          <h2 className="text-[32px] leading-[1.08] sm:text-[38px]">
+            {plural(ideas.length, 'ad idea')} across {plural(buyers, 'buyer')}.
+          </h2>
+          <p className="text-[15px] leading-relaxed text-zinc-500">
+            Every field is editable. <span className="font-semibold text-zinc-900">Nothing is
+            made and nothing is charged</span> until you press a button on a row — Approve, or
+            Make it on a row with no photograph, so you can look at the picture before you decide
+            rather than after. A picture is {money(PICTURE_USD)}
+            {videoUsd ? <>; a ten-second video is {money(videoUsd)}</> : null}.
+          </p>
+          <p className="text-sm leading-relaxed text-zinc-500">
+            Each one is built on one of the formats below and points at that buyer&rsquo;s own
+            page. These get pasted into Ads Manager by you, so the wording is yours.
+          </p>
+        </div>
+        <div className="flex flex-col items-start gap-1.5 sm:items-end">
+          <p className={MICRO}>Spent · ceiling {money(spend.ceiling)}</p>
+          <p className="text-[28px] font-extrabold leading-none tracking-[-0.03em] tabular-nums">
+            {money(spend.total)}
+          </p>
+          <div className="h-1 w-[180px] rounded-sm bg-zinc-200">
+            <div
+              className="h-full rounded-sm bg-teal transition-[width] duration-[400ms]"
+              style={{ width: `${spentPct}%` }}
+            />
+          </div>
+          <p className="text-xs text-zinc-400 tabular-nums">{money(spend.remaining)} left</p>
+        </div>
+      </div>
+
+      <dl className="grid max-w-[560px] grid-cols-3 gap-3">
+        <Stat label="Waiting on you" value={String(waiting.length)} />
+        <Stat label="Being made" value={String(running.length)} />
+        <Stat label="Made" value={String(made.length)} />
+      </dl>
+
+      {/* The queue that blocks every other decision. A row with no picture
+          has nothing on it to judge, so telling the operator how many of
+          those there are is more use than any other number on this screen. */}
+      {undrawn.length ? (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[14px] border border-zinc-200 bg-zinc-50 px-5 py-4">
+          <div className="min-w-0 flex-1 basis-[420px]">
+            <p className="text-sm font-bold text-zinc-900">
               {undrawn.length} of these have no picture yet
             </p>
-            <p className="mt-1 text-sm leading-6 text-zinc-500">
+            <p className="mt-1 text-[13px] leading-relaxed text-zinc-500">
               None of your photographs fitted them, so their picture has to be drawn from the
               description on the card. Each one is {money(PICTURE_USD)}. For a static that
-              picture <span className="font-semibold text-zinc-700">is the ad</span> — approving
+              picture <span className="font-semibold text-zinc-900">is the ad</span> — approving
               it afterwards keeps it and costs nothing more. For a video it is the frame the
               shot opens on, which an approval was always going to buy first.
             </p>
-            <div className="mt-3">
-              <Button
-                disabled={drawingAll}
-                onClick={async () => {
-                  setDrawingAll(true);
-                  try { await onMakePictures(); } finally { setDrawingAll(false); }
-                }}
-              >
-                {drawingAll
-                  ? 'Starting them…'
-                  : `Draw all ${undrawn.length} — ${money(drawAllUsd)}`}
-              </Button>
-            </div>
           </div>
-        ) : null}
+          <Button
+            className="px-5 py-3 text-sm"
+            disabled={drawingAll}
+            onClick={async () => {
+              setDrawingAll(true);
+              try { await onMakePictures(); } finally { setDrawingAll(false); }
+            }}
+          >
+            {drawingAll
+              ? 'Starting them…'
+              : `Draw all ${undrawn.length} — ${money(drawAllUsd)}`}
+          </Button>
+        </div>
+      ) : null}
 
-        <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Waiting on you" value={String(waiting.length)} />
-          <Stat label="Being made" value={String(running.length)} />
-          <Stat label="Made" value={String(made.length)} />
-          <Stat
-            label="Spent"
-            value={`$${spend.total.toFixed(2)}`}
-            sub={`of $${spend.ceiling.toFixed(2)}`}
-          />
-        </dl>
+      {outstanding > spend.remaining ? (
+        <Callout tone="warn" title="Approving everything would pass the ceiling">
+          The {waiting.length} ideas still waiting would cost ${outstanding.toFixed(2)} and
+          there is ${spend.remaining.toFixed(2)} left under the ${spend.ceiling.toFixed(2)}{' '}
+          ceiling. Nothing breaks — approvals are refused once it is reached, one at a time,
+          and nothing is half-charged.
+        </Callout>
+      ) : null}
 
-        {outstanding > spend.remaining ? (
-          <div className="mt-4">
-            <Callout tone="warn" title="Approving everything would pass the ceiling">
-              The {waiting.length} ideas still waiting would cost ${outstanding.toFixed(2)} and
-              there is ${spend.remaining.toFixed(2)} left under the ${spend.ceiling.toFixed(2)}{' '}
-              ceiling. Nothing breaks — approvals are refused once it is reached, one at a time,
-              and nothing is half-charged.
-            </Callout>
+      {/* Scrolls inside itself on a narrow screen. The columns are fixed on
+          purpose: squeezing seven of them into a phone makes every cell a
+          single word wide. */}
+      <div className="-mx-5 overflow-x-auto px-5 sm:mx-0 sm:px-0">
+        <div className="min-w-[1080px]">
+          <div
+            className={`${IDEA_COLS} border-b border-zinc-300 px-4 pb-2.5 text-[11px] font-bold uppercase tracking-[0.1em] text-zinc-400`}
+          >
+            <span>Buyer</span>
+            <span>Format</span>
+            <span>Primary text</span>
+            <span>Headline</span>
+            <span>Button</span>
+            <span>Picture</span>
+            <span className="sr-only">Approve</span>
           </div>
-        ) : null}
-
-        {/* Collapsed, because it is a reference rather than a step: you want it the
-            first time you paste a row into Ads Manager and never again. Built by
-            scripts/build-ad-field-map.py. */}
-        <details className="mt-5">
-          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
-            Which field is which in Ads Manager
-          </summary>
-          <p className="mt-2 text-sm leading-6 text-zinc-500">
-            A real ad with every slot labelled. The two things worth knowing before you paste:
-            the whole block above the picture is <span className="font-semibold text-zinc-700">one
-            field</span>, and Meta&rsquo;s description line{' '}
-            <span className="font-semibold text-zinc-700">is not written here</span> — leave it
-            empty or write your own.
-          </p>
-          {/* Opens full size in a tab: the key under the ad is small at this width,
-              and the whole point of the panel is being able to read it. */}
-          <a href="/ad-field-map.png" target="_blank" rel="noopener" className="mt-3 block">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/ad-field-map.png"
-              alt="A Facebook ad with its primary text, picture, display link, headline,
-                description and button each boxed and numbered, and a key explaining which part of
-                an ad idea fills each one."
-              width={974}
-              height={1292}
-              loading="lazy"
-              className="w-full max-w-[640px] rounded-[var(--radius-brand-card)] border border-black/10"
-            />
-            <span className="mt-1 block text-xs text-zinc-400">Open full size</span>
-          </a>
-        </details>
-      </Card>
-
-      {groups.map((group) => (
-        <div key={group.personaId} className="mt-4">
-          <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-zinc-400">
-            {group.name}
-          </h3>
-          <div className="space-y-3">
-            {group.items.map((idea) => (
+          <ul className="mt-1.5 flex flex-col gap-1.5">
+            {ideas.map((idea) => (
               <IdeaRow key={idea.id} idea={idea} onAction={onAction} />
             ))}
-          </div>
+          </ul>
         </div>
-      ))}
-    </div>
+      </div>
+
+      <p className="text-[13px] text-zinc-500">
+        Showing all {ideas.length}. Approving a row submits it; you paste the result into Ads
+        Manager.
+      </p>
+
+      {/* Collapsed, because it is a reference rather than a step: you want it the
+          first time you paste a row into Ads Manager and never again. Built by
+          scripts/build-ad-field-map.py. */}
+      <details>
+        <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+          Which field is which in Ads Manager
+        </summary>
+        <p className="mt-2 text-sm leading-6 text-zinc-500">
+          A real ad with every slot labelled. The two things worth knowing before you paste:
+          the whole block above the picture is <span className="font-semibold text-zinc-900">one
+          field</span>, and Meta&rsquo;s description line{' '}
+          <span className="font-semibold text-zinc-900">is not written here</span> — leave it
+          empty or write your own.
+        </p>
+        {/* Opens full size in a tab: the key under the ad is small at this width,
+            and the whole point of the panel is being able to read it. */}
+        <a href="/ad-field-map.png" target="_blank" rel="noopener" className="mt-3 block">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/ad-field-map.png"
+            alt="A Facebook ad with its primary text, picture, display link, headline,
+              description and button each boxed and numbered, and a key explaining which part of
+              an ad idea fills each one."
+            width={974}
+            height={1292}
+            loading="lazy"
+            className="w-full max-w-[640px] rounded-[14px] border border-zinc-200"
+          />
+          <span className="mt-1 block text-xs text-zinc-400">Open full size</span>
+        </a>
+      </details>
+    </section>
   );
 }
 
+/** The seven columns, shared by the header and every row so they cannot drift. */
+const IDEA_COLS = 'grid grid-cols-[150px_110px_minmax(0,1fr)_200px_108px_150px_96px] gap-3.5';
+
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 ring-1 ring-zinc-200">
-      <dt className="font-display text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
-        {label}
-      </dt>
-      <dd className="font-display mt-1 text-2xl font-bold tracking-[-0.03em] text-zinc-900">
+    <div className="rounded-[14px] border border-zinc-200 bg-white px-4 py-3">
+      <dt className={MICRO}>{label}</dt>
+      <dd className="mt-1 text-2xl font-extrabold tracking-[-0.03em] text-zinc-900 tabular-nums">
         {value}
         {sub ? <span className="ml-1 text-sm font-medium text-zinc-400">{sub}</span> : null}
       </dd>
@@ -2150,17 +2461,25 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 }
 
 const STATUS_PILL: Record<AdIdea['status'], { label: string; className: string }> = {
-  draft: { label: 'Waiting on you', className: 'bg-zinc-100 text-zinc-600' },
-  approved: { label: 'Approved', className: 'bg-accent-tint text-accent-deep' },
-  generating: { label: 'Being made', className: 'bg-accent-tint text-accent-deep' },
-  generated: { label: 'Made', className: 'bg-accent text-white' },
-  failed: { label: 'Failed', className: 'bg-red-100 text-red-800' },
-  rejected: { label: 'Sent back', className: 'bg-amber-100 text-amber-900' },
+  draft: { label: 'Waiting on you', className: 'bg-zinc-100 text-zinc-500' },
+  approved: { label: 'Approved', className: 'bg-accent-tint text-accent' },
+  generating: { label: 'Being made', className: 'bg-accent-tint text-accent' },
+  generated: { label: 'Made', className: 'bg-[#E6F7F4] text-teal-deep' },
+  failed: { label: 'Failed', className: 'bg-[#FDF3EC] text-[#C2410C]' },
+  rejected: { label: 'Sent back', className: 'bg-amber-tint text-amber-ink' },
 };
+
+/** A small action inside an opened row. The big decisions live in the row itself. */
+const ROW_BUTTON = 'px-4 py-2 text-[13px]';
 
 function IdeaRow({
   idea, onAction,
 }: { idea: AdIdea; onAction: (ideaId: string, init: RequestInit) => Promise<{ did?: string }> }) {
+  // Open from the start on a row that has been sent back and rewritten: the
+  // panel underneath is where the new instruction is read before approving.
+  const [open, setOpen] = useState(
+    () => idea.status === 'draft' && Math.max(1, Number(idea.attempt ?? 1)) > 1,
+  );
   const [editing, setEditing] = useState(false);
   const [redoing, setRedoing] = useState(false);
   const [redoNote, setRedoNote] = useState('');
@@ -2215,6 +2534,14 @@ function IdeaRow({
     && idea.generated_assets.some(
       (a) => a.role === 'preview' && (a.state === 'submitted' || a.state === 'generating'),
     );
+  const inProgress = idea.status === 'generating' || idea.status === 'approved';
+  // The row turns teal once money has been committed to it, as the design's
+  // approved row does — in flight or finished, it is no longer waiting on you.
+  const committed = inProgress || idea.status === 'generated';
+  // Anything that needs reading forces the row open. An error on a collapsed
+  // row is an error nobody sees.
+  const expanded = open || editing || redoing || Boolean(error);
+  const hasMedia = (drawn && !fileUrl) || Boolean(fileUrl) || rejectedAttempts.length > 0;
 
   /**
    * Open the editor on what the row says RIGHT NOW.
@@ -2260,526 +2587,702 @@ function IdeaRow({
     `Goes to: ${idea.destination_url}`,
   ].join('\n');
 
+  const toggle = () => setOpen((o) => !o);
+
+  // The picture cell. The design draws a made picture as a gradient tile; a
+  // real row has the real picture, so the tile wears it, with the gradient
+  // underneath while it loads.
+  let picture: ReactNode;
+  if (drawingNow || busy === 'make-picture') {
+    picture = <PictureTile label="Drawing…" pulse onClick={toggle} />;
+  } else if (fileUrl) {
+    picture = (
+      <PictureTile
+        src={idea.media_type === 'image' ? fileUrl : idea.source_image_url}
+        label={idea.media_type === 'image' ? 'The ad' : 'The video ▸'}
+        onClick={() => setOpen(true)}
+      />
+    );
+  } else if (idea.source_image_url) {
+    picture = (
+      <PictureTile
+        src={idea.source_image_url}
+        label={drawn ? `Drawn · ${money(PICTURE_USD)}` : 'Your photo'}
+        onClick={toggle}
+      />
+    );
+  } else if (needsPicture && idea.status === 'draft') {
+    picture = (
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() => run('make-picture', {
+          method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+        })}
+        className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-[9px] text-xs font-bold
+                   text-zinc-900 transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+      >
+        Make it · {money(PICTURE_USD)}
+      </button>
+    );
+  } else {
+    picture = (
+      <p className="text-[11px] leading-snug text-zinc-400">
+        {needsPicture ? 'No picture yet' : 'Nothing to make it from'}
+      </p>
+    );
+  }
+
+  let decision: ReactNode;
+  if (idea.status === 'draft') {
+    decision = (
+      <div className="flex flex-col items-stretch gap-1">
+        <button
+          type="button"
+          disabled={busy !== null || !idea.source_image_url}
+          title={idea.source_image_url ? undefined : 'Make the picture first — there is nothing to approve yet'}
+          onClick={() => run('approve', {
+            method: 'POST', body: JSON.stringify({ action: 'approve' }),
+          })}
+          className="w-full rounded-lg bg-zinc-900 px-2 py-2.5 text-xs font-extrabold text-white
+                     transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40
+                     disabled:hover:bg-zinc-900"
+        >
+          {busy === 'approve' ? 'Submitting…' : approveCost === 0 ? 'Keep it' : 'Approve'}
+        </button>
+        <p className="text-center text-[11px] leading-tight text-zinc-400 tabular-nums">
+          {approveCost === 0
+            ? 'nothing more to pay'
+            : `${attempt > 1 ? `attempt ${attempt} · ` : ''}${money(approveCost)}`}
+        </p>
+      </div>
+    );
+  } else if (inProgress) {
+    decision = (
+      <p className="flex items-center justify-center gap-1.5 text-xs font-extrabold text-accent">
+        <span className="size-2.5 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent [animation-duration:.8s]" />
+        {pill.label}
+      </p>
+    );
+  } else if (idea.status === 'generated') {
+    decision = <p className="text-center text-xs font-extrabold text-teal">Approved ✓</p>;
+  } else {
+    decision = (
+      <p className={`text-center text-xs font-extrabold ${
+        idea.status === 'failed' ? 'text-[#C2410C]' : 'text-amber-ink'
+      }`}
+      >
+        {pill.label}
+      </p>
+    );
+  }
+
   return (
-    <Card className="p-5 sm:p-6">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-[var(--radius-brand-card)] bg-zinc-900 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
-          {idea.media_type === 'image' ? 'Static' : 'Video'}
-        </span>
-        <span className={`rounded-[var(--radius-brand-card)] px-2 py-0.5 text-xs font-bold uppercase tracking-wide ${pill.className}`}>
-          {pill.label}
-        </span>
-        {idea.edited_at ? (
-          <span className="rounded-[var(--radius-brand-card)] bg-zinc-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-zinc-500">
-            Your words
+    <li
+      className={`animate-rise rounded-xl border transition-colors duration-300 ${
+        committed ? 'border-teal-line bg-teal-tint' : 'border-[#EEF1F5] bg-white'
+      }`}
+    >
+      <div className={`${IDEA_COLS} items-center px-4 py-3`}>
+        <div className="min-w-0">
+          <p className="text-[13px] font-bold leading-[1.3] text-zinc-900">
+            {idea.persona_name ?? 'a buyer whose page has since gone'}
+          </p>
+          <a
+            href={idea.destination_url}
+            target="_blank"
+            rel="noopener"
+            className="text-[11px] text-zinc-400 hover:text-accent"
+          >
+            → their page
+          </a>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={expanded}
+            className="mt-0.5 block text-[11px] font-bold text-accent hover:text-zinc-900"
+          >
+            {expanded ? 'Less ▴' : 'More ▾'}
+          </button>
+        </div>
+        <div className="flex flex-col items-start gap-1">
+          <span
+            className={`rounded-full px-2 py-[3px] text-[11px] font-bold ${
+              idea.media_type === 'image' ? 'bg-[#E6F7F4] text-teal-deep' : 'bg-accent-tint text-accent'
+            }`}
+          >
+            {idea.media_type === 'image' ? 'Static' : 'Video'}
           </span>
-        ) : null}
-        <span className="ml-auto text-xs text-zinc-400">{idea.angle}</span>
+          {idea.edited_at ? (
+            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-400">
+              Your words
+            </span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          className="line-clamp-2 min-w-0 text-left text-[13px] leading-[1.45] text-zinc-900 hover:text-accent"
+        >
+          {idea.primary_text}
+        </button>
+        <p className="min-w-0 text-[13px] font-bold leading-[1.35] text-zinc-900">{idea.headline}</p>
+        <div>
+          <span className="block whitespace-nowrap rounded-md border border-zinc-300 bg-white px-2 py-1 text-center text-xs font-bold text-zinc-500">
+            {idea.cta_label}
+          </span>
+        </div>
+        <div className="min-w-0">{picture}</div>
+        <div>{decision}</div>
       </div>
 
-      {editing ? (
-        <div className="mt-4 space-y-4">
-          <Field label="Headline" help="Truncates around 40 characters on a phone.">
-            <input
-              className={inputClass}
-              value={draft.headline}
-              onChange={(e) => setDraft({ ...draft, headline: e.target.value })}
-            />
-          </Field>
-          <Field label="Primary text" help="Everything before the first line break is what shows before “See more”.">
-            <textarea
-              className={inputClass}
-              rows={6}
-              value={draft.primary_text}
-              onChange={(e) => setDraft({ ...draft, primary_text: e.target.value })}
-            />
-          </Field>
-          <Field label="Button" help="Ads Manager only offers these.">
-            <select
-              className={inputClass}
-              value={draft.cta_label}
-              onChange={(e) => setDraft({ ...draft, cta_label: e.target.value })}
-            >
-              {CTA_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </Field>
-          <Field
-            label={idea.media_type === 'image' ? 'Picture instruction' : 'Video instruction'}
-            help={idea.media_type === 'image'
-              ? 'What to change about your photograph. The product itself is never redrawn — it '
-                + 'is a photo of a real thing somebody will be sent.'
-              : 'One continuous ten-second move that starts on your photograph. There is no '
-                + 'cutting, so this is one shot.'}
-          >
-            <textarea
-              className={inputClass}
-              rows={5}
-              value={draft.kie_prompt}
-              onChange={(e) => setDraft({ ...draft, kie_prompt: e.target.value })}
-            />
-          </Field>
-          <Field label="Where the ad goes" help="Their own landing page by default. Change it to send this one ad somewhere else.">
-            <input
-              className={inputClass}
-              value={draft.destination_url}
-              onChange={(e) => setDraft({ ...draft, destination_url: e.target.value })}
-            />
-          </Field>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              disabled={busy !== null}
-              onClick={() => run('save', { method: 'PATCH', body: JSON.stringify(draft) })}
-            >
-              {busy === 'save' ? 'Saving…' : 'Save'}
-            </Button>
-            <Button variant="ghost" disabled={busy !== null} onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
+      {expanded ? (
+        <div className="border-t border-[#EEF1F5] px-4 pb-5 pt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${pill.className}`}>
+              {pill.label}
+            </span>
+            {idea.edited_at ? (
+              <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-bold text-zinc-500">
+                Your words
+              </span>
+            ) : null}
+            <span className="ml-auto text-xs text-zinc-400">{idea.angle}</span>
           </div>
-        </div>
-      ) : (
-        <>
-          <p className="mt-3 text-lg font-bold leading-snug text-zinc-900">{idea.headline}</p>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-700">
-            {idea.primary_text}
-          </p>
-          <p className="mt-3 text-sm text-zinc-500">
-            Button <span className="font-semibold text-zinc-700">{idea.cta_label}</span> →{' '}
-            <a
-              href={idea.destination_url}
-              target="_blank"
-              rel="noopener"
-              className="break-all underline hover:text-zinc-900"
-            >
-              {idea.destination_url}
-            </a>
-          </p>
 
-          <div className="mt-4 flex items-start gap-4">
-            {idea.source_image_url ? (
-              <div className="shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={idea.source_image_url}
-                  alt=""
-                  loading="lazy"
-                  className="size-20 rounded-[var(--radius-brand-card)] border border-black/10 object-cover"
-                />
-                {/* Said outright rather than left to look like one of theirs.
-                    Once a made picture is written onto the row it is
-                    indistinguishable from a photograph, and the whole reason it
-                    is allowed to exist is that it does not pretend to be the
-                    product. */}
-                {idea.source_image_generated ? (
-                  <p className="mt-1 w-20 text-center text-[10px] font-bold uppercase leading-tight tracking-wide text-zinc-400">
-                    Made
+          <div className={`mt-4 grid gap-8 ${hasMedia ? 'grid-cols-[minmax(0,1fr)_minmax(0,420px)]' : ''}`}>
+            <div className="min-w-0">
+              {editing ? (
+                <div className="space-y-4">
+                  <Field label="Headline" help="Truncates around 40 characters on a phone.">
+                    <input
+                      className={inputClass}
+                      value={draft.headline}
+                      onChange={(e) => setDraft({ ...draft, headline: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Primary text" help="Everything before the first line break is what shows before “See more”.">
+                    <textarea
+                      className={inputClass}
+                      rows={6}
+                      value={draft.primary_text}
+                      onChange={(e) => setDraft({ ...draft, primary_text: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Button" help="Ads Manager only offers these.">
+                    <select
+                      className={inputClass}
+                      value={draft.cta_label}
+                      onChange={(e) => setDraft({ ...draft, cta_label: e.target.value })}
+                    >
+                      {CTA_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </Field>
+                  <Field
+                    label={idea.media_type === 'image' ? 'Picture instruction' : 'Video instruction'}
+                    help={idea.media_type === 'image'
+                      ? 'What to change about your photograph. The product itself is never redrawn — it '
+                        + 'is a photo of a real thing somebody will be sent.'
+                      : 'One continuous ten-second move that starts on your photograph. There is no '
+                        + 'cutting, so this is one shot.'}
+                  >
+                    <textarea
+                      className={inputClass}
+                      rows={5}
+                      value={draft.kie_prompt}
+                      onChange={(e) => setDraft({ ...draft, kie_prompt: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Where the ad goes" help="Their own landing page by default. Change it to send this one ad somewhere else.">
+                    <input
+                      className={inputClass}
+                      value={draft.destination_url}
+                      onChange={(e) => setDraft({ ...draft, destination_url: e.target.value })}
+                    />
+                  </Field>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      className={ROW_BUTTON}
+                      disabled={busy !== null}
+                      onClick={() => run('save', { method: 'PATCH', body: JSON.stringify(draft) })}
+                    >
+                      {busy === 'save' ? 'Saving…' : 'Save'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className={ROW_BUTTON}
+                      disabled={busy !== null}
+                      onClick={() => setEditing(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className={MICRO}>Headline</p>
+                  <p className="mt-1 text-lg font-bold leading-snug text-zinc-900">{idea.headline}</p>
+                  <p className={`${MICRO} mt-4`}>Primary text</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-600">
+                    {idea.primary_text}
                   </p>
+                  <p className="mt-4 text-sm text-zinc-500">
+                    Button <span className="font-semibold text-zinc-900">{idea.cta_label}</span> →{' '}
+                    <a
+                      href={idea.destination_url}
+                      target="_blank"
+                      rel="noopener"
+                      className="break-all underline underline-offset-[3px] hover:text-accent"
+                    >
+                      {idea.destination_url}
+                    </a>
+                  </p>
+
+                  <div className="mt-4 flex items-start gap-4">
+                    {idea.source_image_url ? (
+                      <div className="shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={idea.source_image_url}
+                          alt=""
+                          loading="lazy"
+                          className="size-20 rounded-xl border border-zinc-200 object-cover"
+                        />
+                        {/* Said outright rather than left to look like one of theirs.
+                            Once a made picture is written onto the row it is
+                            indistinguishable from a photograph, and the whole reason it
+                            is allowed to exist is that it does not pretend to be the
+                            product. */}
+                        {idea.source_image_generated ? (
+                          <p className="mt-1 w-20 text-center text-[10px] font-bold uppercase leading-tight tracking-[0.1em] text-zinc-400">
+                            Made
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="min-w-0 text-sm leading-6 text-zinc-600">
+                      <p>{idea.visual_concept}</p>
+                      {needsPicture ? (
+                        <p className="mt-1 text-xs font-semibold text-zinc-500">
+                          None of your photographs fitted this one, so the picture has to be drawn from
+                          the description below — {money(PICTURE_USD)}, and you look at it before you
+                          approve anything. It shows the buyer&rsquo;s situation, never your product:
+                          nobody has photographed it, so anything drawn of it would be invented.
+                        </p>
+                      ) : null}
+                      {drawn ? (
+                        <p className="mt-1 text-xs font-semibold text-zinc-500">
+                          {idea.media_type === 'image'
+                            ? 'This picture was drawn, not photographed, and it is the ad. Approving it '
+                              + 'keeps it and costs nothing more.'
+                            : 'This picture was drawn, not photographed. It is the frame the shot opens '
+                              + 'on, and it is already paid for.'}
+                        </p>
+                      ) : null}
+                      {!idea.source_image_url && !idea.generated_image_prompt ? (
+                        <p className="mt-1 text-xs font-semibold text-amber-ink">
+                          No photograph was chosen for this one and no picture has been described yet,
+                          so it cannot be made. The words are still usable.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Open by default once a result has been sent back. The panel below
+                      tells the operator to read the instruction before approving, and a
+                      collapsed <details> makes that an instruction to go looking — on
+                      the one row where the wording has just changed underneath them. */}
+                  <details className="mt-4" open={idea.status === 'draft' && attempt > 1}>
+                    <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+                      {idea.status === 'draft' && attempt > 1
+                        ? 'The rewritten instruction'
+                        : `The instruction that makes the ${idea.media_type === 'image' ? 'picture' : 'video'}`}
+                    </summary>
+                    <p className="mt-2 whitespace-pre-wrap rounded-xl bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
+                      {idea.kie_prompt}
+                    </p>
+                    {/* A video with no photograph opens on a picture that has to be made
+                        first, and the instruction above is only the camera move. Without
+                        this the operator approves two things having read one. */}
+                    {idea.media_type === 'video' && idea.generated_image_prompt && !idea.source_image_url ? (
+                      <>
+                        <p className={`${MICRO} mt-3`}>
+                          The picture it opens on, which is made first
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap rounded-xl bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
+                          {idea.generated_image_prompt}
+                        </p>
+                      </>
+                    ) : null}
+                    {idea.video_storyboard?.beats?.length ? (
+                      <>
+                        {/* The beats were written for the FIRST instruction and are never
+                            rewritten, because they are a note on the plan rather than
+                            anything sent to the model. Once the instruction has been
+                            revised they can contradict it outright — so they are labelled
+                            rather than left to look current. */}
+                        {attempt > 1 ? (
+                          <p className="mt-2 text-xs font-semibold text-amber-ink">
+                            Written for attempt 1. The instruction above has changed since; where the
+                            two disagree, the instruction is what runs.
+                          </p>
+                        ) : null}
+                        <ul className="mt-2 space-y-1 text-xs text-zinc-500">
+                          {idea.video_storyboard.beats.map((b) => (
+                            <li key={`${b.at_second}-${b.on_screen}`}>
+                              <span className="font-mono font-bold text-zinc-400 tabular-nums">{b.at_second}s</span>{' '}
+                              {b.on_screen}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    {idea.them_vs_us?.why_this_works ? (
+                      <p className="mt-2 text-xs leading-5 text-zinc-500">
+                        <span className="font-bold uppercase tracking-[0.1em] text-zinc-400">Why this one · </span>
+                        {idea.them_vs_us.why_this_works}
+                      </p>
+                    ) : null}
+                  </details>
+                </>
+              )}
+            </div>
+
+            {hasMedia ? (
+              <div className="min-w-0">
+                {/* The drawn picture, at a size somebody can actually judge.
+                    The thumbnail is an identifier; this is the decision. A static's
+                    drawn picture is the finished ad and an 80-pixel square is not enough
+                    to approve one from — which is the whole complaint this was built
+                    for: sixty rows with nothing on them to look at. */}
+                {drawn && !fileUrl ? (
+                  <div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={idea.source_image_url as string}
+                      alt={idea.visual_concept}
+                      loading="lazy"
+                      className="w-full max-w-[420px] rounded-[14px] border border-zinc-200"
+                    />
+                    <p className="mt-2 text-xs text-zinc-400">
+                      Drawn from the description, {money(PICTURE_USD)} charged.{' '}
+                      {idea.media_type === 'image'
+                        ? 'This is the ad. Approve keeps it; sending it back draws a different one.'
+                        : 'This is the first frame. Approve buys the ten-second move through it.'}{' '}
+                      <a
+                        href={idea.source_image_url as string}
+                        download
+                        target="_blank"
+                        rel="noopener"
+                        className="underline hover:text-zinc-900"
+                      >
+                        Download
+                      </a>
+                    </p>
+                  </div>
+                ) : null}
+
+                {fileUrl ? (
+                  <div>
+                    {(asset?.attempt ?? 1) > 1 ? (
+                      <p className={`${MICRO} mb-2`}>Attempt {asset?.attempt}</p>
+                    ) : null}
+                    {idea.media_type === 'image' ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-[14px] border border-zinc-200" />
+                    ) : (
+                      <video src={fileUrl} controls playsInline className="w-full rounded-[14px] border border-zinc-200" />
+                    )}
+                    <p className="mt-2 text-xs text-zinc-400">
+                      {asset?.credits_charged != null
+                        ? `Charged ${asset.credits_charged} credits.`
+                        : 'Charged at the estimate.'}{' '}
+                      {asset?.stored_url
+                        ? 'Stored in your own bucket, so this link does not expire.'
+                        : 'This is KIE\'s temporary link — save the file, it expires in a few days.'}{' '}
+                      <a href={fileUrl} download target="_blank" rel="noopener" className="underline hover:text-zinc-900">
+                        Download
+                      </a>
+                    </p>
+                    {idea.media_type === 'video' ? (
+                      // The known failure mode, said where it can be acted on. A ten-second
+                      // generation is long enough for the model to lose the object, and it
+                      // loses it at the END — which is the part nobody watches twice.
+                      <p className="mt-1 text-xs text-zinc-400">
+                        Watch the last second before you post it. Ten seconds is long enough for the
+                        model to drift off the product; if it has, send it back and say so.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* Rejected attempts are kept, not replaced. Two reasons: they were paid
+                    for, and the only way to tell whether a note actually worked is to be
+                    able to look at the one before it. */}
+                {rejectedAttempts.length ? (
+                  <details className="mt-4 first:mt-0">
+                    <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+                      {rejectedAttempts.length} earlier attempt{rejectedAttempts.length === 1 ? '' : 's'} you
+                      sent back
+                    </summary>
+                    <div className="mt-3 space-y-4">
+                      {rejectedAttempts.map((old) => {
+                        const url = old.stored_url ?? old.result_url;
+                        return (
+                          <div key={old.id} className="rounded-[14px] border border-zinc-200 bg-zinc-50 p-3">
+                            <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-amber-ink">
+                              Attempt {old.attempt ?? 1} · sent back
+                            </p>
+                            {old.rejected_note ? (
+                              <p className="mt-1 text-sm leading-6 text-zinc-600">
+                                <span className="font-semibold text-zinc-900">You said:</span> {old.rejected_note}
+                              </p>
+                            ) : null}
+                            {url ? (
+                              idea.media_type === 'image' ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={url} alt="" className="mt-2 w-full rounded-xl border border-zinc-200 opacity-75" />
+                              ) : (
+                                <video src={url} controls playsInline className="mt-2 w-full rounded-xl border border-zinc-200" />
+                              )
+                            ) : null}
+                            {old.prompt_used ? (
+                              <details className="mt-2">
+                                <summary className="cursor-pointer text-xs font-semibold text-zinc-400 hover:text-zinc-900">
+                                  The instruction that made this one
+                                </summary>
+                                <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-5 text-zinc-500">
+                                  {old.prompt_used}
+                                </p>
+                              </details>
+                            ) : null}
+                            <p className="mt-2 text-xs text-zinc-400">
+                              {old.credits_charged != null
+                                ? `Charged ${old.credits_charged} credits — sending it back does not refund it.`
+                                : 'Charged at the estimate — sending it back does not refund it.'}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
                 ) : null}
               </div>
             ) : null}
-            <div className="min-w-0 text-sm leading-6 text-zinc-600">
-              <p>{idea.visual_concept}</p>
-              {needsPicture ? (
-                <p className="mt-1 text-xs font-semibold text-zinc-500">
-                  None of your photographs fitted this one, so the picture has to be drawn from
-                  the description below — {money(PICTURE_USD)}, and you look at it before you
-                  approve anything. It shows the buyer&rsquo;s situation, never your product:
-                  nobody has photographed it, so anything drawn of it would be invented.
-                </p>
-              ) : null}
-              {drawn ? (
-                <p className="mt-1 text-xs font-semibold text-zinc-500">
-                  {idea.media_type === 'image'
-                    ? 'This picture was drawn, not photographed, and it is the ad. Approving it '
-                      + 'keeps it and costs nothing more.'
-                    : 'This picture was drawn, not photographed. It is the frame the shot opens '
-                      + 'on, and it is already paid for.'}
-                </p>
-              ) : null}
-              {!idea.source_image_url && !idea.generated_image_prompt ? (
-                <p className="mt-1 text-xs font-semibold text-amber-700">
-                  No photograph was chosen for this one and no picture has been described yet,
-                  so it cannot be made. The words are still usable.
-                </p>
-              ) : null}
-            </div>
           </div>
 
-          {/* Open by default once a result has been sent back. The panel below
-              tells the operator to read the instruction before approving, and a
-              collapsed <details> makes that an instruction to go looking — on
-              the one row where the wording has just changed underneath them. */}
-          <details className="mt-3" open={idea.status === 'draft' && attempt > 1}>
-            <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
-              {idea.status === 'draft' && attempt > 1
-                ? 'The rewritten instruction'
-                : `The instruction that makes the ${idea.media_type === 'image' ? 'picture' : 'video'}`}
-            </summary>
-            <p className="mt-2 whitespace-pre-wrap rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
-              {idea.kie_prompt}
+          {inProgress ? (
+            <p className="mt-4 rounded-xl bg-accent-tint px-4 py-3 text-sm text-accent-deep">
+              {drawingNow
+                ? 'Drawing the picture — about half a minute. It comes back here as a draft for you '
+                  + 'to look at; nothing is approved by this.'
+                : `Being made now — about ${idea.media_type === 'image' ? 'a minute' : 'three minutes'}.`}
+              {' '}This screen checks every ten seconds. Closing the tab does not cancel it; the file
+              is collected next time you open the campaign.
             </p>
-            {/* A video with no photograph opens on a picture that has to be made
-                first, and the instruction above is only the camera move. Without
-                this the operator approves two things having read one. */}
-            {idea.media_type === 'video' && idea.generated_image_prompt && !idea.source_image_url ? (
-              <>
-                <p className="mt-3 text-xs font-bold uppercase tracking-wide text-zinc-400">
-                  The picture it opens on, which is made first
-                </p>
-                <p className="mt-1 whitespace-pre-wrap rounded-[var(--radius-brand-card)] bg-zinc-50 px-4 py-3 font-mono text-xs leading-5 text-zinc-600">
-                  {idea.generated_image_prompt}
-                </p>
-              </>
-            ) : null}
-            {idea.video_storyboard?.beats?.length ? (
-              <>
-                {/* The beats were written for the FIRST instruction and are never
-                    rewritten, because they are a note on the plan rather than
-                    anything sent to the model. Once the instruction has been
-                    revised they can contradict it outright — so they are labelled
-                    rather than left to look current. */}
-                {attempt > 1 ? (
-                  <p className="mt-2 text-xs font-semibold text-amber-700">
-                    Written for attempt 1. The instruction above has changed since; where the
-                    two disagree, the instruction is what runs.
-                  </p>
-                ) : null}
-                <ul className="mt-2 space-y-1 text-xs text-zinc-500">
-                  {idea.video_storyboard.beats.map((b) => (
-                    <li key={`${b.at_second}-${b.on_screen}`}>
-                      <span className="font-mono font-bold text-zinc-400">{b.at_second}s</span>{' '}
-                      {b.on_screen}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
-            {idea.them_vs_us?.why_this_works ? (
-              <p className="mt-2 text-xs leading-5 text-zinc-500">
-                <span className="font-bold uppercase tracking-wide text-zinc-400">Why this one · </span>
-                {idea.them_vs_us.why_this_works}
+          ) : null}
+
+          {/* After a redo the row is a draft again, and the two things that decide
+              whether to approve it are what was wrong last time and what was
+              changed about it. Both are shown together rather than as a warning
+              strip, because nothing here has gone wrong — this is the loop working. */}
+          {idea.status === 'draft' && attempt > 1 ? (
+            <div className="mt-4 rounded-xl border border-[#F3D9BC] bg-amber-tint px-4 py-3 text-sm leading-6 text-[#7A3B07]">
+              <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-amber-ink">
+                Attempt {attempt} — not made yet
               </p>
-            ) : null}
-          </details>
-        </>
-      )}
-
-      {/* The drawn picture, at a size somebody can actually judge.
-          The thumbnail above is an identifier; this is the decision. A static's
-          drawn picture is the finished ad and an 80-pixel square is not enough
-          to approve one from — which is the whole complaint this was built
-          for: sixty rows with nothing on them to look at. */}
-      {drawn && !fileUrl ? (
-        <div className="mt-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={idea.source_image_url as string}
-            alt={idea.visual_concept}
-            loading="lazy"
-            className="w-full max-w-[420px] rounded-[var(--radius-brand-card)] border border-black/10"
-          />
-          <p className="mt-2 text-xs text-zinc-400">
-            Drawn from the description, {money(PICTURE_USD)} charged.{' '}
-            {idea.media_type === 'image'
-              ? 'This is the ad. Approve keeps it; sending it back draws a different one.'
-              : 'This is the first frame. Approve buys the ten-second move through it.'}{' '}
-            <a
-              href={idea.source_image_url as string}
-              download
-              target="_blank"
-              rel="noopener"
-              className="underline hover:text-zinc-700"
-            >
-              Download
-            </a>
-          </p>
-        </div>
-      ) : null}
-
-      {fileUrl ? (
-        <div className="mt-4">
-          {(asset?.attempt ?? 1) > 1 ? (
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-400">
-              Attempt {asset?.attempt}
+              {idea.redo_note ? (
+                <p className="mt-1"><span className="font-semibold">You said:</span> {idea.redo_note}</p>
+              ) : (
+                <p className="mt-1">
+                  Sent back for another roll of the same instruction. These models are not
+                  deterministic, so the same words can give a different result.
+                </p>
+              )}
+              {idea.rejected_reason ? (
+                <p className="mt-1">
+                  <span className="font-semibold">What changed:</span> {idea.rejected_reason}
+                </p>
+              ) : null}
+              <p className="mt-2 text-xs">
+                Read the instruction above before approving — this is the sentence that will be
+                used, and approving it spends ${cost.toFixed(2)} again.
+              </p>
+            </div>
+          ) : idea.rejected_reason ? (
+            <p className="mt-4 rounded-xl border border-[#F3D9BC] bg-amber-tint px-4 py-3 text-sm text-[#7A3B07]">
+              {idea.rejected_reason}
             </p>
           ) : null}
-          {idea.media_type === 'image' ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={fileUrl} alt={idea.visual_concept} className="w-full rounded-[var(--radius-brand-card)] border border-black/10" />
-          ) : (
-            <video src={fileUrl} controls playsInline className="w-full rounded-[var(--radius-brand-card)] border border-black/10" />
-          )}
-          <p className="mt-2 text-xs text-zinc-400">
-            {asset?.credits_charged != null
-              ? `Charged ${asset.credits_charged} credits.`
-              : 'Charged at the estimate.'}{' '}
-            {asset?.stored_url
-              ? 'Stored in your own bucket, so this link does not expire.'
-              : 'This is KIE\'s temporary link — save the file, it expires in a few days.'}{' '}
-            <a href={fileUrl} download target="_blank" rel="noopener" className="underline hover:text-zinc-700">
-              Download
-            </a>
-          </p>
-          {idea.media_type === 'video' ? (
-            // The known failure mode, said where it can be acted on. A ten-second
-            // generation is long enough for the model to lose the object, and it
-            // loses it at the END — which is the part nobody watches twice.
-            <p className="mt-1 text-xs text-zinc-400">
-              Watch the last second before you post it. Ten seconds is long enough for the
-              model to drift off the product; if it has, send it back and say so.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
 
-      {/* Rejected attempts are kept, not replaced. Two reasons: they were paid
-          for, and the only way to tell whether a note actually worked is to be
-          able to look at the one before it. */}
-      {rejectedAttempts.length ? (
-        <details className="mt-4">
-          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
-            {rejectedAttempts.length} earlier attempt{rejectedAttempts.length === 1 ? '' : 's'} you
-            sent back
-          </summary>
-          <div className="mt-3 space-y-4">
-            {rejectedAttempts.map((old) => {
-              const url = old.stored_url ?? old.result_url;
-              return (
-                <div key={old.id} className="rounded-[var(--radius-brand-card)] bg-zinc-50 p-3 ring-1 ring-zinc-200">
-                  <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
-                    Attempt {old.attempt ?? 1} · sent back
-                  </p>
-                  {old.rejected_note ? (
-                    <p className="mt-1 text-sm leading-6 text-zinc-700">
-                      <span className="font-semibold">You said:</span> {old.rejected_note}
-                    </p>
-                  ) : null}
-                  {url ? (
-                    idea.media_type === 'image' ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={url} alt="" className="mt-2 w-full rounded-[var(--radius-brand-card)] border border-black/10 opacity-75" />
-                    ) : (
-                      <video src={url} controls playsInline className="mt-2 w-full rounded-[var(--radius-brand-card)] border border-black/10" />
-                    )
-                  ) : null}
-                  {old.prompt_used ? (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer text-xs font-semibold text-zinc-400 hover:text-zinc-700">
-                        The instruction that made this one
-                      </summary>
-                      <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-5 text-zinc-500">
-                        {old.prompt_used}
-                      </p>
-                    </details>
-                  ) : null}
-                  <p className="mt-2 text-xs text-zinc-400">
-                    {old.credits_charged != null
-                      ? `Charged ${old.credits_charged} credits — sending it back does not refund it.`
-                      : 'Charged at the estimate — sending it back does not refund it.'}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </details>
-      ) : null}
-
-      {idea.status === 'generating' || idea.status === 'approved' ? (
-        <p className="mt-4 rounded-[var(--radius-brand-card)] bg-accent-tint px-4 py-3 text-sm text-accent-deep">
-          {drawingNow
-            ? 'Drawing the picture — about half a minute. It comes back here as a draft for you '
-              + 'to look at; nothing is approved by this.'
-            : `Being made now — about ${idea.media_type === 'image' ? 'a minute' : 'three minutes'}.`}
-          {' '}This screen checks every ten seconds. Closing the tab does not cancel it; the file
-          is collected next time you open the campaign.
-        </p>
-      ) : null}
-
-      {/* After a redo the row is a draft again, and the two things that decide
-          whether to approve it are what was wrong last time and what was
-          changed about it. Both are shown together rather than as a warning
-          strip, because nothing here has gone wrong — this is the loop working. */}
-      {idea.status === 'draft' && attempt > 1 ? (
-        <div className="mt-4 rounded-[var(--radius-brand-card)] bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-          <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
-            Attempt {attempt} — not made yet
-          </p>
-          {idea.redo_note ? (
-            <p className="mt-1"><span className="font-semibold">You said:</span> {idea.redo_note}</p>
-          ) : (
-            <p className="mt-1">
-              Sent back for another roll of the same instruction. These models are not
-              deterministic, so the same words can give a different result.
-            </p>
-          )}
-          {idea.rejected_reason ? (
-            <p className="mt-1">
-              <span className="font-semibold">What changed:</span> {idea.rejected_reason}
-            </p>
-          ) : null}
-          <p className="mt-2 text-xs text-amber-800">
-            Read the instruction above before approving — this is the sentence that will be
-            used, and approving it spends ${cost.toFixed(2)} again.
-          </p>
-        </div>
-      ) : idea.rejected_reason ? (
-        <p className="mt-4 rounded-[var(--radius-brand-card)] bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {idea.rejected_reason}
-        </p>
-      ) : null}
-
-      {/* Rejecting a finished file. Two clicks and not one, because the second
-          click is where the money goes and the instruction it will spend it on
-          has to be on screen first. */}
-      {redoing ? (
-        <div className="mt-4 rounded-[var(--radius-brand-card)] bg-zinc-50 p-4 ring-1 ring-zinc-200">
-          <Field
-            label="What is wrong with it?"
-            help={idea.media_type === 'video'
-              ? 'Plain words. “The bottle turns into a flip cap by the end”, “too dark”, '
-                + '“the hand blocks the label”. Leave it empty to run the same instruction '
-                + 'again for a different roll.'
-              : 'Plain words. “Wrong kitchen”, “the label is unreadable”, “too cluttered”. '
-                + 'Leave it empty to run the same instruction again for a different roll.'}
-          >
-            <textarea
-              className={inputClass}
-              rows={3}
-              value={redoNote}
-              placeholder="Leave empty for another roll of the same instruction"
-              onChange={(e) => setRedoNote(e.target.value)}
-            />
-          </Field>
-          <p className="mt-2 text-sm leading-6 text-zinc-500">
-            This does not spend anything. The instruction gets rewritten from what you say
-            here and the row comes back as a draft, so you read the new instruction before
-            approving it. The {idea.media_type === 'image' ? 'picture' : 'video'} you are
-            sending back is kept — it was paid for, and it is what the next one gets compared
-            against.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-3">
-            <Button
-              disabled={busy !== null}
-              onClick={() => run('redo', {
-                method: 'POST', body: JSON.stringify({ action: 'redo', note: redoNote }),
-              })}
-            >
-              {busy === 'redo'
-                ? (redoNote.trim() ? 'Rewriting the instruction…' : 'Sending it back…')
-                : (redoNote.trim() ? 'Rewrite it and send it back' : 'Send it back as-is')}
-            </Button>
-            <Button variant="ghost" disabled={busy !== null} onClick={() => setRedoing(false)}>
-              Keep it
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="mt-4">
-          <Callout tone="error" title="That did not go through">{error}</Callout>
-        </div>
-      ) : null}
-
-      {!editing && !redoing ? (
-        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-200 pt-4">
-          {idea.status === 'draft' ? (
-            <>
-              {/* The button that unblocks the row. Before this existed, a row
-                  with no photograph showed a paragraph of prose and a disabled
-                  Approve — nothing to look at and no way forward. */}
-              {needsPicture ? (
+          {/* Rejecting a finished file. Two clicks and not one, because the second
+              click is where the money goes and the instruction it will spend it on
+              has to be on screen first. */}
+          {redoing ? (
+            <div className="mt-4 rounded-[14px] border border-zinc-200 bg-zinc-50 p-4">
+              <Field
+                label="What is wrong with it?"
+                help={idea.media_type === 'video'
+                  ? 'Plain words. “The bottle turns into a flip cap by the end”, “too dark”, '
+                    + '“the hand blocks the label”. Leave it empty to run the same instruction '
+                    + 'again for a different roll.'
+                  : 'Plain words. “Wrong kitchen”, “the label is unreadable”, “too cluttered”. '
+                    + 'Leave it empty to run the same instruction again for a different roll.'}
+              >
+                <textarea
+                  className={inputClass}
+                  rows={3}
+                  value={redoNote}
+                  placeholder="Leave empty for another roll of the same instruction"
+                  onChange={(e) => setRedoNote(e.target.value)}
+                />
+              </Field>
+              <p className="mt-2 text-sm leading-6 text-zinc-500">
+                This does not spend anything. The instruction gets rewritten from what you say
+                here and the row comes back as a draft, so you read the new instruction before
+                approving it. The {idea.media_type === 'image' ? 'picture' : 'video'} you are
+                sending back is kept — it was paid for, and it is what the next one gets compared
+                against.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-3">
                 <Button
+                  className={ROW_BUTTON}
                   disabled={busy !== null}
-                  onClick={() => run('make-picture', {
-                    method: 'POST', body: JSON.stringify({ action: 'make-picture' }),
+                  onClick={() => run('redo', {
+                    method: 'POST', body: JSON.stringify({ action: 'redo', note: redoNote }),
                   })}
                 >
-                  {busy === 'make-picture'
-                    ? 'Drawing it…'
-                    : `Make the picture — ${money(PICTURE_USD)}`}
+                  {busy === 'redo'
+                    ? (redoNote.trim() ? 'Rewriting the instruction…' : 'Sending it back…')
+                    : (redoNote.trim() ? 'Rewrite it and send it back' : 'Send it back as-is')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  className={ROW_BUTTON}
+                  disabled={busy !== null}
+                  onClick={() => setRedoing(false)}
+                >
+                  Keep it
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="mt-4">
+              <Callout tone="error" title="That did not go through">{error}</Callout>
+            </div>
+          ) : null}
+
+          {!editing && !redoing ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-[#EEF1F5] pt-4">
+              {/* Make it and Approve sit in the row itself, with their prices.
+                  What is here is everything else a row can have done to it. */}
+              {idea.status === 'draft' ? (
+                <>
+                  <Button variant="ghost" className={ROW_BUTTON} disabled={busy !== null} onClick={startEditing}>
+                    Rewrite it
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className={ROW_BUTTON}
+                    disabled={busy !== null}
+                    onClick={() => run('reject', {
+                      method: 'POST', body: JSON.stringify({ action: 'reject' }),
+                    })}
+                  >
+                    Send back
+                  </Button>
+                </>
+              ) : null}
+
+              {/* The exit a finished row never had. A generated ad used to be a dead
+                  end — no buttons at all — which made a video that drifted in its
+                  last second permanent. */}
+              {canRedo ? (
+                <Button
+                  variant="ghost"
+                  className={ROW_BUTTON}
+                  disabled={busy !== null}
+                  onClick={() => setRedoing(true)}
+                >
+                  {idea.status === 'failed' ? 'Change it and try again' : 'Not right — send it back'}
                 </Button>
               ) : null}
-              <Button
-                disabled={busy !== null || !idea.source_image_url}
-                onClick={() => run('approve', {
-                  method: 'POST', body: JSON.stringify({ action: 'approve' }),
-                })}
-              >
-                {busy === 'approve'
-                  ? 'Submitting…'
-                  : approveCost === 0
-                    ? 'Keep it — nothing more to pay'
-                    : attempt > 1
-                      ? `Approve attempt ${attempt} — ${money(approveCost)}`
-                      : `Approve — ${money(approveCost)}`}
-              </Button>
-              <Button variant="ghost" disabled={busy !== null} onClick={startEditing}>
-                Rewrite it
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={busy !== null}
-                onClick={() => run('reject', {
-                  method: 'POST', body: JSON.stringify({ action: 'reject' }),
-                })}
-              >
-                Send back
-              </Button>
-            </>
-          ) : null}
 
-          {/* The exit a finished row never had. A generated ad used to be a dead
-              end — no buttons at all — which made a video that drifted in its
-              last second permanent. */}
-          {canRedo ? (
-            <Button
-              variant="ghost"
-              disabled={busy !== null}
-              onClick={() => setRedoing(true)}
-            >
-              {idea.status === 'failed' ? 'Change it and try again' : 'Not right — send it back'}
-            </Button>
-          ) : null}
+              {idea.status === 'rejected' || idea.status === 'failed' ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    className={ROW_BUTTON}
+                    disabled={busy !== null}
+                    onClick={() => run('reset', {
+                      method: 'POST', body: JSON.stringify({ action: 'reset' }),
+                    })}
+                  >
+                    {busy === 'reset' ? 'Putting it back…' : 'Put it back'}
+                  </Button>
+                  <Button variant="ghost" className={ROW_BUTTON} disabled={busy !== null} onClick={startEditing}>
+                    Rewrite it
+                  </Button>
+                </>
+              ) : null}
 
-          {idea.status === 'rejected' || idea.status === 'failed' ? (
-            <>
-              <Button
-                variant="ghost"
-                disabled={busy !== null}
-                onClick={() => run('reset', {
-                  method: 'POST', body: JSON.stringify({ action: 'reset' }),
-                })}
-              >
-                {busy === 'reset' ? 'Putting it back…' : 'Put it back'}
-              </Button>
-              <Button variant="ghost" disabled={busy !== null} onClick={startEditing}>
-                Rewrite it
-              </Button>
-            </>
-          ) : null}
+              {/* Costs nothing — the picture already exists. It decides which of
+                  this buyer's three ads their landing page is wearing, so that
+                  somebody who clicks this picture arrives at it rather than at a
+                  different one, or at none. The first picture drawn for a buyer
+                  takes the slot on its own; this is how to overrule that. */}
+              {idea.source_image_url ? (
+                <Button
+                  variant="ghost"
+                  className={ROW_BUTTON}
+                  disabled={busy !== null}
+                  onClick={() => run('use-on-page', {
+                    method: 'POST', body: JSON.stringify({ action: 'use-on-page' }),
+                  })}
+                >
+                  {busy === 'use-on-page' ? 'Putting it on the page…' : 'Use this on the landing page'}
+                </Button>
+              ) : null}
 
-          {/* Costs nothing — the picture already exists. It decides which of
-              this buyer's three ads their landing page is wearing, so that
-              somebody who clicks this picture arrives at it rather than at a
-              different one, or at none. The first picture drawn for a buyer
-              takes the slot on its own; this is how to overrule that. */}
-          {idea.source_image_url ? (
-            <Button
-              variant="ghost"
-              disabled={busy !== null}
-              onClick={() => run('use-on-page', {
-                method: 'POST', body: JSON.stringify({ action: 'use-on-page' }),
-              })}
-            >
-              {busy === 'use-on-page' ? 'Putting it on the page…' : 'Use this on the landing page'}
-            </Button>
+              <span className="ml-auto">
+                <CopyButton text={paste} label="Copy for Ads Manager" />
+              </span>
+            </div>
           ) : null}
-
-          <CopyButton text={paste} label="Copy for Ads Manager" />
         </div>
       ) : null}
-    </Card>
+    </li>
+  );
+}
+
+/**
+ * The picture cell, once there is a picture. A button because the picture is
+ * the thing people click to see it bigger, and that is what opening the row does.
+ */
+function PictureTile({
+  src, label, pulse = false, onClick,
+}: { src?: string | null; label: string; pulse?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="bg-brand-gradient relative flex h-11 w-full items-center justify-center overflow-hidden
+                 rounded-lg text-[11px] font-bold text-white"
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" />
+      ) : null}
+      <span
+        className={`relative whitespace-nowrap rounded-full px-2 py-0.5 ${src ? 'bg-navy/70' : ''} ${
+          pulse ? 'animate-pulse' : ''
+        }`}
+      >
+        {label}
+      </span>
+    </button>
   );
 }
 

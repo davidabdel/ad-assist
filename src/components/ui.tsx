@@ -10,17 +10,16 @@ import { twMerge } from 'tailwind-merge';
  * already says `p-6` gets whichever Tailwind emitted last, which is not the one
  * they asked for.
  */
-const cn = (...parts: ClassValue[]) => twMerge(clsx(parts));
+export const cn = (...parts: ClassValue[]) => twMerge(clsx(parts));
 
 /**
- * The handful of shapes the dashboard reuses. Deliberately small — this is an
- * internal tool for one person, and a component library would be more code to
- * maintain than the app it dresses.
+ * The handful of shapes the dashboard reuses. Deliberately small — a component
+ * library would be more code to maintain than the app it dresses.
  *
- * These are the only places the brand's SHAPE lives: square edges, hard rules,
- * a black control that turns accent-blue under the cursor. Its COLOURS come
- * from the repainted zinc ramp in globals.css, which is why almost none of the
- * class names below changed when the design did.
+ * These are the only places the brand's SHAPE lives: navy pills that turn
+ * accent-blue under the cursor, soft 12px inputs, tinted callouts. Its COLOURS
+ * come from the repainted zinc ramp in globals.css, which is why most class
+ * names elsewhere did not change when the design did.
  *
  * Colours are written out rather than driven by the light/dark variables in
  * globals.css. The public listicle pages follow the visitor's system theme; the
@@ -29,19 +28,40 @@ const cn = (...parts: ClassValue[]) => twMerge(clsx(parts));
 
 export function Button({
   children, variant = 'primary', className, ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'ghost' | 'danger' }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'primary' | 'gradient' | 'ghost' | 'danger';
+}) {
   return (
     <button
       {...rest}
       className={cn(
-        'font-display inline-flex items-center justify-center gap-2 rounded-[var(--radius-brand)]',
-        'px-6 py-3 text-base font-semibold tracking-[-0.01em]',
-        'transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        // The comp's one interaction signature: the black control goes blue
-        // rather than grey, on every direction and every screen.
+        'inline-flex items-center justify-center gap-2.5 rounded-[var(--radius-brand)]',
+        'px-6 py-3.5 text-[15px] font-bold',
+        'transition-[background-color,border-color,color,filter] disabled:cursor-not-allowed disabled:opacity-40',
+        // The one interaction signature: navy goes blue under the cursor.
         variant === 'primary' && 'bg-zinc-900 text-white hover:bg-accent disabled:hover:bg-zinc-900',
-        variant === 'ghost' && 'border-[1.5px] border-zinc-900 bg-white text-zinc-900 hover:bg-zinc-50',
-        variant === 'danger' && 'bg-red-600 text-white hover:bg-red-500',
+        variant === 'gradient' && 'bg-brand-gradient font-extrabold text-white '
+          + 'shadow-[0_10px_24px_-10px_rgba(8,125,232,.7)] hover:brightness-[1.06]',
+        variant === 'ghost' && 'border-[1.5px] border-zinc-300 bg-white text-zinc-900 hover:border-zinc-900',
+        variant === 'danger' && 'bg-[#C2410C] text-white hover:bg-[#9A3412]',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Back, Cancel, Change — the actions that should not compete with Next. */
+export function TextButton({
+  children, className, ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      {...rest}
+      className={cn(
+        'px-1.5 py-3 text-[15px] font-semibold text-zinc-500 hover:text-zinc-900 disabled:opacity-40',
         className,
       )}
     >
@@ -59,19 +79,21 @@ export function Field({
 }: { label: string; help?: ReactNode; error?: string | null; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="font-display block text-base font-semibold tracking-[-0.01em] text-zinc-900">
-        {label}
-      </span>
-      {help ? <span className="mt-1 block text-sm leading-6 text-zinc-500">{help}</span> : null}
+      <span className="block text-sm font-bold text-zinc-900">{label}</span>
       <div className="mt-2">{children}</div>
-      {error ? <span className="mt-2 block text-sm font-medium text-red-600">{error}</span> : null}
+      {error
+        ? <span className="mt-2 block text-[13px] font-medium leading-normal text-[#C2410C]">{error}</span>
+        : help
+          ? <span className="mt-2 block text-[13px] leading-normal text-zinc-400">{help}</span>
+          : null}
     </label>
   );
 }
 
-export const inputClass = 'w-full rounded-[var(--radius-brand)] border-2 border-zinc-900 bg-white '
-  + 'px-4 py-3 text-base text-zinc-900 placeholder:text-zinc-400 '
-  + 'focus:border-accent focus:outline-none';
+export const inputClass = 'w-full rounded-xl border-2 border-zinc-300 bg-white '
+  + 'px-4 py-3.5 text-[15px] font-medium text-zinc-900 placeholder:text-[#9AA4B2] '
+  + 'transition-colors focus:border-accent focus:outline-none '
+  + 'aria-[invalid=true]:border-[#F97316]';
 
 export function Callout({
   tone = 'info', title, children,
@@ -79,38 +101,64 @@ export function Callout({
   return (
     <div
       className={cn(
-        // A square block with one heavy edge on the reading side, rather than a
-        // rounded tinted pill. The comp has no callouts of its own, so this is
-        // the brand's rules applied to a shape it does not specify: hard
-        // corners, a hairline box, and the tone carried by the edge.
-        'rounded-[var(--radius-brand)] border border-l-4 px-4 py-3 text-sm leading-6',
-        tone === 'info' && 'border-zinc-200 border-l-accent bg-zinc-50 text-zinc-700',
-        tone === 'warn' && 'border-amber-200 border-l-amber-500 bg-amber-50 text-amber-900',
-        tone === 'error' && 'border-red-200 border-l-red-600 bg-red-50 text-red-900',
-        tone === 'good' && 'border-emerald-200 border-l-emerald-600 bg-emerald-50 text-emerald-900',
+        'flex items-start gap-3.5 rounded-[var(--radius-brand-card)] border px-[18px] py-4 text-sm leading-[1.55]',
+        tone === 'info' && 'border-[#D6E8FB] bg-accent-tint text-zinc-900',
+        tone === 'warn' && 'border-[#F3D9BC] bg-amber-tint text-[#7A3B07]',
+        tone === 'error' && 'border-[#F6D6BE] bg-[#FDF3EC] text-[#9A3412]',
+        tone === 'good' && 'border-teal-line bg-teal-tint text-zinc-900',
       )}
     >
-      {title ? <p className="font-display font-semibold tracking-[-0.01em]">{title}</p> : null}
-      <div className={title ? 'mt-1' : undefined}>{children}</div>
+      {tone === 'good' ? (
+        <span className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-teal text-[13px] font-extrabold text-white">
+          ✓
+        </span>
+      ) : null}
+      <div className="min-w-0 flex-1">
+        {title ? <p className="font-bold">{title}</p> : null}
+        <div className={title ? 'mt-1' : undefined}>{children}</div>
+      </div>
     </div>
   );
 }
 
+/** The mark and the wordmark, as every screen but the footer wears them. */
+export function Logo({ size = 36, onDark = false }: { size?: number; onDark?: boolean }) {
+  return (
+    <span className="flex items-center gap-2.5 whitespace-nowrap">
+      {/* eslint-disable-next-line @next/next/no-img-element -- a 36px static mark; next/image buys nothing here */}
+      <img src="/brand/adtocart-icon.png" alt="" style={{ height: size, width: 'auto' }} className="block" />
+      <span
+        className={cn('font-extrabold tracking-[-0.03em]', onDark ? 'text-white' : 'text-zinc-900')}
+        style={{ fontSize: Math.round(size * 0.62) }}
+      >
+        adtocart<span className="text-zinc-400">.cc</span>
+      </span>
+    </span>
+  );
+}
+
 /**
- * `dash` is what scopes the display typeface — see the note in globals.css. It
- * belongs here because every signed-in screen goes through this wrapper and no
- * public /p/ page does.
+ * `dash` scopes the heading rules in globals.css. It belongs here because every
+ * signed-in screen goes through this wrapper and no public /p/ page does.
  *
- * `header` exists so the masthead can run the full width of the window while
- * the reading column stays at its measure. The comp puts the wordmark on a
- * solid black field, and a black field that stops at a 672px column reads as a
- * box rather than as chrome. Sign-in passes nothing and gets no masthead.
+ * `header` runs the full width of the window while the reading column stays at
+ * its measure. `wide` is for the campaign screen, whose build view and ideas
+ * table need the room.
  */
-export function Shell({ header, children }: { header?: ReactNode; children: ReactNode }) {
+export function Shell({
+  header, wide = false, children,
+}: { header?: ReactNode; wide?: boolean; children: ReactNode }) {
   return (
     <div className="dash min-h-full flex-1 bg-white text-zinc-900">
       {header}
-      <div className="mx-auto w-full max-w-2xl px-5 py-10 sm:py-14">{children}</div>
+      <div
+        className={cn(
+          'mx-auto w-full px-5 py-10 sm:px-11 sm:py-14',
+          wide ? 'max-w-[1240px]' : 'max-w-[808px]',
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -119,7 +167,7 @@ export function Card({ children, className }: { children: ReactNode; className?:
   return (
     <div
       className={cn(
-        'rounded-[var(--radius-brand-card)] border-[1.5px] border-zinc-900 bg-white p-6 sm:p-8',
+        'rounded-2xl border border-zinc-200 bg-white p-6 shadow-[0_30px_60px_-40px_rgba(6,22,46,.35)] sm:p-8',
         className,
       )}
     >
@@ -144,9 +192,8 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
           el.textContent = 'Press Cmd+C';
         }
       }}
-      className="font-display shrink-0 rounded-[var(--radius-brand)] border-[1.5px] border-zinc-900
-                 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-900 hover:bg-zinc-900
-                 hover:text-white"
+      className="shrink-0 rounded-[var(--radius-brand)] border-[1.5px] border-zinc-300
+                 bg-white px-3.5 py-1.5 text-[13px] font-bold text-zinc-900 hover:border-zinc-900"
     >
       {label}
     </button>

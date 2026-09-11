@@ -1,16 +1,19 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
 import { SessionProvider, useSession } from '@/components/Session';
-import { SignIn } from '@/components/SignIn';
-import { Shell } from '@/components/ui';
+import { Logo, Shell } from '@/components/ui';
 
 /**
- * Wraps the two dashboard routes. Deliberately NOT in the root layout: the
- * public `/p/` landing pages share that layout, and they must render for a
- * stranger with no Supabase client, no token and no delay — Meta's ad review
- * crawler is one of the strangers.
+ * Wraps the signed-in routes. Deliberately NOT in the root layout: the public
+ * `/p/` landing pages share that layout, and they must render for a stranger
+ * with no Supabase client, no token and no delay — Meta's ad review crawler is
+ * one of the strangers.
+ *
+ * Signed out, it sends you to /login and remembers where you were going, so a
+ * link to a campaign still lands on that campaign after signing in.
  */
 export function Authed({ children }: { children: ReactNode }) {
   return (
@@ -22,43 +25,49 @@ export function Authed({ children }: { children: ReactNode }) {
 
 function Gate({ children }: { children: ReactNode }) {
   const { ready, session } = useSession();
+  const router = useRouter();
+  const pathname = usePathname();
 
-  if (!ready) {
+  useEffect(() => {
+    if (ready && !session) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+  }, [ready, session, router, pathname]);
+
+  if (!ready || !session) {
     return (
       <Shell>
         <p className="text-zinc-500">Loading…</p>
       </Shell>
     );
   }
-  if (!session) return <SignIn />;
   return <>{children}</>;
 }
 
 /**
- * The masthead every signed-in screen carries. Passed to `Shell` as its
- * `header` so the black field runs edge to edge.
- *
- * The wordmark is the comp's, full stop and all: Outfit, heavy, tight, with the
- * one accent colour spent on a single character. It is the only place the brand
- * signs its own name, so it is the only place that gets the blue.
+ * The masthead every signed-in screen carries: the mark on the left, whatever
+ * the screen wants to say on the right, and a 3px gradient bar along the top
+ * edge when there is progress to show (0–1).
  */
-export function TopBar() {
+export function TopBar({ right, progress }: { right?: ReactNode; progress?: number }) {
   const { email, signOut } = useSession();
   return (
-    <header className="bg-zinc-900 text-white">
-      <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-4 px-5 py-4">
-        <Link
-          href="/"
-          className="font-display text-xl font-bold tracking-[-0.02em] text-white"
-        >
-          Ad Assist<span className="text-accent">.</span>
+    <header className="relative border-b border-zinc-200 bg-white">
+      {progress !== undefined ? (
+        <div
+          className="bg-brand-gradient absolute inset-x-0 top-0 h-[3px] origin-left transition-transform duration-500 ease-[cubic-bezier(.2,.7,.2,1)]"
+          style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress))})` }}
+        />
+      ) : null}
+      <div className="mx-auto flex w-full max-w-[1240px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-4 sm:px-11">
+        <Link href="/campaigns" aria-label="Your campaigns">
+          <Logo size={36} />
         </Link>
-        <div className="flex items-baseline gap-4 text-sm text-zinc-400">
-          <span className="hidden sm:inline">{email}</span>
+        <div className="flex min-w-0 items-center gap-4 text-[13px] text-zinc-500">
+          {right ?? <span className="hidden truncate sm:inline">{email}</span>}
           <button
             type="button"
             onClick={() => signOut()}
-            className="font-semibold underline underline-offset-4 hover:text-white"
+            className="shrink-0 rounded-full border border-zinc-300 px-3.5 py-[7px] text-xs font-semibold
+                       text-zinc-500 hover:border-zinc-900 hover:text-zinc-900"
           >
             Sign out
           </button>
