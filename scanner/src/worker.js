@@ -233,9 +233,49 @@ async function claimOne(client) {
   return data?.[0] ?? null;
 }
 
+/**
+ * Is this job's campaign a check-script drill rather than somebody's work?
+ *
+ * A drill campaign is seeded straight into `pages_built` so the check can drive
+ * the real route and watch it queue real searches. Those searches land in the
+ * same table this worker drains, so the price of a check run was a Chrome
+ * window opening on David's Mac and scrolling the Ad Library for a campaign he
+ * has never heard of — which is exactly how it got reported: "anytime I open
+ * the campaign, Chrome opens and starts a search".
+ *
+ * Unknown means real. A read that fails, a campaign that has been deleted
+ * mid-run, a database that predates the column: all of those run the job. The
+ * only thing that skips Chrome is an explicit true.
+ */
+async function isDrill(client, campaignId) {
+  if (!campaignId) return false;
+  const { data, error } = await client.from('campaigns')
+    .select('is_drill').eq('id', campaignId).maybeSingle();
+  if (error) return false;
+  return data?.is_drill === true;
+}
+
 async function runJob(client, job) {
   const started = Date.now();
   console.log(`\n▶ ${job.kind} ${job.id.slice(0, 8)} (attempt ${job.attempts})`);
+
+  // Before the heartbeat and before the browser: a drill is closed on the spot.
+  // It is completed rather than failed because the check is asserting that the
+  // queue works, and a failed row would retry twice and then read as a broken
+  // scanner on every dashboard.
+  if (await isDrill(client, job.campaign_id)) {
+    await client.from('scanner_jobs').update({
+      status: 'completed',
+      items_found: 0,
+      items_qualified: 0,
+      notes: 'drill campaign — completed without opening Chrome',
+      error_message: null,
+      completed_at: new Date().toISOString(),
+    }).eq('id', job.id);
+    console.log('  drill campaign — closed without opening Chrome');
+    return;
+  }
+
   const stop = beat(client, job.id);
   try {
     const result = job.kind === 'ingest'

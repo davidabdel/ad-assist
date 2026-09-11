@@ -207,6 +207,8 @@ const slug = `keep-going-${Date.now()}`;
 const { data: campaign, error: cErr } = await db.from('campaigns').insert({
   user_id: userId,
   title: 'Keep going check',
+  // Never reaches the Mac worker's Chrome. See 0019_drill_campaigns.sql.
+  is_drill: true,
   slug,
   source_url: 'https://example.com/thing',
   region: 'AU',
@@ -276,6 +278,7 @@ async function seedAtPagesBuilt(label) {
   const { data: c, error } = await db.from('campaigns').insert({
     user_id: userId,
     title: label,
+    is_drill: true,
     slug: `${label}-${Date.now()}`,
     source_url: 'https://example.com/thing',
     region: 'AU',
@@ -348,6 +351,7 @@ check('a second tick does not queue a second set',
 const { data: parked, error: parkErr } = await db.from('campaigns').insert({
   user_id: userId,
   title: 'tick-gate-check',
+  is_drill: true,
   slug: `tick-gate-${Date.now()}`,
   source_url: 'https://example.com/thing',
   region: 'AU',
@@ -390,6 +394,7 @@ async function seedFinished(label, { withGap, withBrief = false }) {
   const { data: c, error } = await db.from('campaigns').insert({
     user_id: userId,
     title: label,
+    is_drill: true,
     slug: `${label}-${Date.now()}`,
     source_url: 'https://example.com/thing',
     region: 'AU',

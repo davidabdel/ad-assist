@@ -139,6 +139,8 @@ const slug = `picture-check-${Date.now()}`;
 const { data: campaign, error: campaignError } = await db.from('campaigns').insert({
   user_id: userId,
   title: 'Picture check',
+  // Never reaches the Mac worker's Chrome. See 0019_drill_campaigns.sql.
+  is_drill: true,
   slug,
   source_url: 'https://example.com/product',
   product_type: 'ecom',

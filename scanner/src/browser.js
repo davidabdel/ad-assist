@@ -86,8 +86,19 @@ async function launchChrome(headless) {
     launched = spawn(CHROME, args, { detached: true, stdio: 'ignore' });
     launched.unref();
 
+    // A ChildProcess that cannot be spawned emits 'error', and an 'error' with
+    // no listener is an UNCAUGHT EXCEPTION — it kills the worker rather than
+    // the job. Found with CHROME_PATH pointed at a path that does not exist:
+    // the process died on ENOENT, the job stayed 'running' until the reaper
+    // came for it, and nothing anywhere recorded a reason. Which is precisely
+    // the failure this file's header says it exists to avoid. Catch it and let
+    // the wait below turn it into a job error with the real cause in it.
+    let spawnError = null;
+    launched.on('error', (e) => { spawnError = e; });
+
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
+      if (spawnError) throw new Error(`could not start Chrome at ${CHROME}: ${spawnError.message}`);
       if (await portAlive(PORT)) break;
       await sleep(250);
     }

@@ -48,6 +48,7 @@ async function seed(title, patch) {
   const { data, error } = await db.from('campaigns').insert({
     user_id: userId,
     title,
+    is_drill: true,
     slug: `${title.toLowerCase().replace(/\W+/g, '-')}-${Date.now()}`,
     source_url: 'https://example.com/thing',
     region: 'AU',
