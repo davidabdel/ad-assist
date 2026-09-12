@@ -73,3 +73,29 @@ Admin sessions last eight hours and use HttpOnly, Secure-in-production, SameSite
 Still required before production: Stripe test-mode checkout/portal/webhook journeys; real Supabase email confirmations, rate-limit headers and RLS policies in the deployed environment; refund/chargeback operational procedure; provider-cost invoice reconciliation; load testing; managed browser execution. Merchant custom domains and Shopify purchase/ROAS attribution remain future integrations. The owner dashboard measures the SaaS business; it does not claim to measure merchants' Shopify sales.
 
 Local verification completed: full migration-chain and SaaS security tests, TypeScript, targeted ESLint, production webpack build, and HTTP checks for `/admin`, `/pricing`, `/billing` (200) plus unauthenticated metrics, billing and tick endpoints (401). These checks used no live customer data or paid provider calls.
+
+## Free-plan local integration environment
+
+Production stays on Supabase Free. A separate local Supabase stack uses the `adtocart-local` project ID and an isolated `adtocart` Colima profile. It contains no copied customer data. Hosted preview branching is not required for these tests.
+
+Start the existing local runtime and services:
+
+```sh
+colima start adtocart --cpu 2 --memory 3 --disk 8 --mount none --activate=false
+export DOCKER_HOST="unix://${HOME}/.colima/adtocart/docker.sock"
+npm exec --yes --package=supabase -- supabase start -x studio,realtime,edge-runtime,logflare,vector,imgproxy,supavisor
+node scripts/saas-local-check.mjs
+```
+
+The integration script refuses a remote Supabase URL, creates two disposable users, starts a localhost app with no paid provider credentials, and tests Auth login, billing-account synchronization, cross-account campaign access, anonymous/authenticated Data API isolation, and admin login/metrics/logout. It removes its test users and stops the app afterwards. It does not test email confirmation or real Stripe checkout yet. Local secrets printed by the CLI are development-only and must never be deployed.
+
+All 26 migrations and the local integration checks passed on 12 September 2026. This extends the isolated SQL tests with the real Supabase Auth and PostgREST services.
+
+To release resources without deleting local database data:
+
+```sh
+npm exec --yes --package=supabase -- supabase stop
+colima stop adtocart
+```
+
+The initial runtime and images need several GB of disk space; avoid downloading optional services on this machine until more storage is available.

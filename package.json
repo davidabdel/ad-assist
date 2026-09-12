@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:saas": "node scripts/saas-db-check.mjs && node --experimental-strip-types scripts/saas-security-check.mjs && node --experimental-strip-types --test scripts/free-scan-check.mjs"
+    "test:saas": "node scripts/saas-db-check.mjs && node --experimental-strip-types scripts/saas-security-check.mjs && node --experimental-strip-types --test scripts/free-scan-check.mjs",
+    "test:saas:local": "node scripts/saas-local-check.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
