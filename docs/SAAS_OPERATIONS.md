@@ -120,3 +120,6 @@ Read-only hosted Auth check on 12 September 2026: email signup enabled, email co
 
 
 SMTP configured 13 September 2026 using the owner’s existing ImprovMX subscription: notifications@adtocart.cc, sender AdtoCart, smtp.improvmx.com:587 (TLS). Non-secret settings verified through the Supabase Management API after saving. ImprovMX reports MX, SPF and both DKIM records valid; DMARC is p=none. End-to-end delivery still awaits an authorized test message and recipient confirmation. Existing david@adtocart.cc credential was preserved.
+
+
+Authorized live email test on 13 September 2026: Supabase accepted the signup email to david@adtocart.cc (HTTP 200). ImprovMX logs confirm SMTP delivery and forwarding to the configured inbox, with the destination Google mail server returning 250/2.0.0 OK. Subject: Confirm your email address. Inbox visibility and completion of the confirmation link still require recipient confirmation.
