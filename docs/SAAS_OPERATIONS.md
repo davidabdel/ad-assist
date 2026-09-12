@@ -43,7 +43,7 @@ Billing webhooks must be monitored and replayed on failure. Current provider sta
 4. Run `node scripts/admin-password.mjs` in your terminal. Choose at least 16 characters. Save the generated `ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` into server-side deployment settings. The script does not echo or save your plaintext password. Do not paste credentials into the repository or conversation. Rotating either setting invalidates existing admin sessions.
 5. Configure Stripe **test** credentials first. Create three recurring monthly USD prices, exactly $149 / $499 / $1,499, and a one-off $59 video pack. Set the four `STRIPE_PRICE_*` IDs. The pack grants ten ten-second renders. No annual plans, promotions, automatic overages or multi-quantity purchases are enabled.
 6. Register `/api/billing/webhook` with its signing secret. Enable `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `invoice.paid`, `refund.created`, `refund.updated`, `refund.failed`. Events use the pinned Stripe API adapter version `2025-04-30.basil` and signatures are verified against raw bytes with a five-minute tolerance.
-7. Configure Stripe's customer billing portal for those same plans, cancellation and payment-method management. Restrict changes to supported monthly prices; do not allow trial creation, quantities, coupons or annual prices. Review taxation and customer terms for the operating business before live checkout. Those settings are not created automatically.
+7. Configure a dedicated Stripe customer billing portal and set its ID as `STRIPE_PORTAL_CONFIGURATION` (the app fails closed without it), for those same plans, cancellation and payment-method management. Restrict changes to supported monthly prices; do not allow trial creation, quantities, coupons or annual prices. Review taxation and customer terms for the operating business before live checkout. Those settings are not created automatically.
 8. Verify Supabase fresh signup, email delivery, return URLs, two-account isolation, a free scan, a private trial preview, paid checkout, webhook delivery, campaign allowance exhaustion, video credits and cancellation in a preview environment.
 9. Configure a managed scheduler to call the existing authenticated `/api/tick` endpoint. Vercel Cron can do so on an appropriate commercial plan; this branch does not upgrade a hosting plan or create a paid external service. The tick also polls accepted media jobs and stores completed assets without an open customer tab. Campaign locking serializes media follow-ups. The dashboard shows the most recent tick and browser-job queue/stale-job counts.
 10. Replace the Mac-based browser worker with managed infrastructure before promising unattended ad-library scans. The existing worker still handles browser-only stores and Meta scanning. This branch adds billing/admin visibility, not a replacement browser service.
@@ -99,3 +99,14 @@ colima stop adtocart
 ```
 
 The initial runtime and images need several GB of disk space; avoid downloading optional services on this machine until more storage is available.
+
+
+## Stripe test account setup
+
+AdtoCart's four USD test prices and a dedicated portal configuration have been created in the UnrealAdz Stripe account (`acct_1SE1MRGkDjIcIDlQ`). No live catalog or real payments were changed. `scripts/stripe-test-setup.mjs` is an idempotent test-only setup helper that verifies that account and rejects live keys. Its credential/config files stay under ignored `.scratch/` with owner-only permissions.
+
+With the local Supabase services running, `ADTOCART_TEST_STRIPE=1 node scripts/saas-local-check.mjs` also exercises real Stripe test checkout creation and subscriptions. Webhook events are signed and replayed locally against provider-verified objects; this does not prove hosted webhook delivery or browser card entry. Test customers are deleted afterwards.
+
+Provider-backed Stripe tests passed on 12 September 2026: checkout retry idempotency, no access before payment, subscription and invoice reconciliation, dedicated portal configuration, actual test refund with duplicate delivery, plan changes, scheduled cancellation and final cancellation. Hosted webhook transport, customer browser payment entry and video-pack payment completion remain unverified.
+
+Hosting launch decision: the existing Vercel team is Hobby. Vercel restricts that plan to personal non-commercial use (https://vercel.com/docs/limits/fair-use-guidelines). A commercial launch needs an appropriate hosting plan or a compatible alternate host. Supabase can remain Free independently. No hosting upgrade has been purchased.

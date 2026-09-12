@@ -2,6 +2,7 @@
 // Refuses remote targets. Never creates customers or purchases on hosted services.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { randomBytes, scryptSync } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 const local = JSON.parse(execFileSync('npm', ['exec','--yes','--package=supabase','--','supabase','status','-o','json'], { encoding:'utf8', stdio:['ignore','pipe','ignore'] }));
@@ -13,6 +14,12 @@ const password=randomBytes(24).toString('hex'), salt=randomBytes(16).toString('h
 const origin='http://127.0.0.1:3106';
 const env={...process.env,NEXT_PUBLIC_SITE_URL:origin,NEXT_PUBLIC_SUPABASE_URL:local.API_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY:local.ANON_KEY,SUPABASE_SERVICE_ROLE_KEY:local.SERVICE_ROLE_KEY,ADMIN_PASSWORD_HASH:`${salt}:${scryptSync(password,salt,64).toString('hex')}`,ADMIN_SESSION_SECRET:randomBytes(32).toString('hex'),FREE_SCAN_SECRET:randomBytes(32).toString('hex'),OPENAI_API_KEY:'',KIE_API_KEY:'',STRIPE_SECRET_KEY:'',STRIPE_WEBHOOK_SECRET:''};
 delete env.VERCEL;
+let stripeConfig;
+if(process.env.ADTOCART_TEST_STRIPE==='1'){
+ stripeConfig=JSON.parse(readFileSync('.scratch/stripe-test-config.json','utf8'));
+ assert.ok(stripeConfig.STRIPE_SECRET_KEY.startsWith('sk_test_'));
+ Object.assign(env,stripeConfig,{STRIPE_WEBHOOK_SECRET:randomBytes(32).toString('hex')});
+}
 const server=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--webpack','--hostname','127.0.0.1','--port','3106'],{env,stdio:'ignore'});
 const users=[];
 async function request(path,token,body,method=body?'POST':'GET',cookie){
@@ -38,6 +45,10 @@ try {
  assert.equal((await request('/api/billing')).status,401);
  const billing=await request('/api/billing',tokens[0]);assert.equal(billing.status,200);assert.equal((await billing.json()).account.plan,null);
  console.log('PASS campaign ownership isolation and customer billing access');
+ if(stripeConfig){
+  const {checkStripe}=await import('./stripe-local-check.mjs');
+  await checkStripe({config:stripeConfig,secret:env.STRIPE_WEBHOOK_SECRET,origin,token:tokens[0],user:users[0],svc,request});
+ }
  const publicClient=anon();
  for(const table of ['billing_accounts','model_usage','media_usage','users']){
   const result=await publicClient.from(table).select('*');assert.ok(result.error || result.data.length===0,`${table} must not disclose rows`);
