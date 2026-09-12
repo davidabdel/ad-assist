@@ -116,6 +116,7 @@ function pokeTick() {
   ticking = fetch(TICK_URL, {
     method: 'POST',
     headers: { authorization: `Bearer ${TICK_SECRET}` },
+    signal: AbortSignal.timeout(290_000),
   })
     .then(async (res) => {
       const body = await res.json().catch(() => null);
@@ -314,7 +315,9 @@ async function runJob(client, job) {
 async function main() {
   const client = db();
   console.log(`ad-assist worker "${WORKER_ID}" — ${ONCE ? 'single job' : `polling, up to ${CONCURRENCY} at once`}`);
-  console.log('Chrome runs headful, so leave the Mac awake while jobs are queued.');
+  console.log(process.env.SCANNER_HEADLESS === 'true'
+    ? 'Chrome runs headless on this worker host.'
+    : 'Chrome runs headful, so leave the Mac awake while jobs are queued.');
   if (!ONCE) {
     console.log(TICK_URL
       ? `Driving campaigns at ${TICK_URL} every ${Math.round(TICK_EVERY_MS / 1000)}s — `
@@ -323,12 +326,21 @@ async function main() {
   }
   console.log('');
 
+  let stopping = false;
+  const stop = () => { stopping = true; console.log('Stopping claims; waiting for active jobs to finish.'); };
+  process.once('SIGTERM', stop);
+  process.once('SIGINT', stop);
   let idle = 0;
   // Jobs in flight right now. Each is its own Chrome tab and its own
   // heartbeat, so they neither block nor steal from one another.
   const active = new Set();
 
   for (;;) {
+    if (stopping) {
+      await Promise.all(active);
+      if (ticking) await ticking;
+      return;
+    }
     // Free anything a dead worker left holding before looking for new work.
     // PostgrestBuilder is thenable but not a Promise — it has no .catch(), so
     // this has to be awaited and checked rather than chained.
@@ -346,7 +358,7 @@ async function main() {
     // atomically, so calling it in a loop is safe with other workers running —
     // which is the normal case here, launchd's and a Terminal one.
     let claimed = 0;
-    while (active.size < (ONCE ? 1 : CONCURRENCY)) {
+    while (!stopping && active.size < (ONCE ? 1 : CONCURRENCY)) {
       const job = await claimOne(client);
       if (!job) break;
       claimed += 1;

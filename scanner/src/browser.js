@@ -48,7 +48,7 @@ let launched = null;
 let launching = null;
 
 /** Connect to our Chrome, starting it if it isn't already up. */
-export async function getBrowser({ headless = false } = {}) {
+export async function getBrowser({ headless = process.env.SCANNER_HEADLESS === 'true' } = {}) {
   if (!(await portAlive(PORT))) {
     if (launching) await launching.catch(() => {});
     else {
@@ -74,6 +74,7 @@ async function launchChrome(headless) {
     mkdirSync(PROFILE, { recursive: true });
     const args = [
       `--remote-debugging-port=${PORT}`,
+      '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${PROFILE}`,
       '--no-first-run',
       '--no-default-browser-check',

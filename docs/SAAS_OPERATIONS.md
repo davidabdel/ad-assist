@@ -123,3 +123,8 @@ SMTP configured 13 September 2026 using the owner’s existing ImprovMX subscrip
 
 
 Authorized live email test on 13 September 2026: Supabase accepted the signup email to david@adtocart.cc (HTTP 200). ImprovMX logs confirm SMTP delivery and forwarding to the configured inbox, with the destination Google mail server returning 250/2.0.0 OK. Subject: Confirm your email address. Inbox visibility and completion of the confirmation link still require recipient confirmation.
+
+
+The test recipient completed confirmation: a read-only Auth check verified email_confirmed_at and last_sign_in_at for david@adtocart.cc. The signup-email gate is now verified through SMTP delivery and account confirmation.
+
+Scanner server preparation is in [SCANNER_HOSTING.md](SCANNER_HOSTING.md). Linux/headless configuration, a non-root container recipe, bounded tick requests and graceful worker shutdown are implemented. Hosting selection, container build and real browser validation remain pending.
