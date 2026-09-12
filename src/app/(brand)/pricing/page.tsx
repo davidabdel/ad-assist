@@ -1,0 +1,4 @@
+import Link from 'next/link';
+import { PlanCards } from '@/components/Billing';
+export const metadata={title:'Pricing | AdtoCart'};
+export default function Pricing(){return <main className="site min-h-screen bg-[#F5F8FC] px-5 py-12 text-zinc-900"><div className="mx-auto max-w-6xl"><Link href="/" className="font-bold text-accent">← AdtoCart</Link><h1 className="mt-8 text-4xl font-bold">Find your next buying angle.</h1><p className="mb-9 mt-4 text-lg text-zinc-600">Start with a free product scan. Choose a plan when you’re ready to build and publish.</p><PlanCards/><p className="mt-7 text-base text-zinc-600">Prices in USD, excluding applicable taxes. Video: $59 for ten 10-second renders, with an active subscription. Campaign and image allowances reset each billing month. Text generation is subject to the provider-cost allowance detailed in Plans and billing. Generated output is subject to source quality and your approval.</p></div></main>;}

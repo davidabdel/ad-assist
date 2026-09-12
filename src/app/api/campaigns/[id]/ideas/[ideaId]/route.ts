@@ -1,3 +1,4 @@
+import { usageContext } from '@/lib/usage';
 import { z } from 'zod';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { serviceClient } from '@/lib/supabase';
@@ -314,7 +315,7 @@ export async function POST(
     }
 
     if (parsed.data.action === 'redo') {
-      return await redoIdea(idea as Record<string, unknown>, parsed.data.note);
+      return await usageContext.run({ campaignId: id, stage: 'revision' }, () => redoIdea(idea as Record<string, unknown>, parsed.data.note));
     }
 
     if (parsed.data.action === 'reject') {

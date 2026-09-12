@@ -1,3 +1,5 @@
+import { requirePaidCampaign } from '@/lib/billing/entitlements';
+import { usageContext } from '@/lib/usage';
 import { serviceClient } from '@/lib/supabase';
 import { ingestProductFromServer } from '@/lib/ingest/cloud';
 import { ingestPdfFromUrl } from '@/lib/ingest/pdf';
@@ -289,7 +291,12 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
     // of date, and acting on a stale status is how a stage runs twice.
     const { data: fresh } = await db.from('campaigns')
       .select('*').eq('id', campaign.id).maybeSingle();
-    return await unit((fresh as CampaignRow | null) ?? campaign, db);
+    const current = (fresh as CampaignRow | null) ?? campaign;
+    if (!(fresh?.is_trial && ['pending','scraping','base_review'].includes(current.status))) {
+      await requirePaidCampaign(current.id);
+    }
+    return await usageContext.run({ campaignId: current.id, stage: current.status },
+      () => unit(current, db));
   } finally {
     // Every path inside returns, including the fail() ones. Releasing here
     // rather than at each return is what keeps the next call from waiting out

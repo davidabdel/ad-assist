@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:saas": "node scripts/saas-db-check.mjs && node --experimental-strip-types scripts/saas-security-check.mjs && node --experimental-strip-types --test scripts/free-scan-check.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
@@ -25,6 +26,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

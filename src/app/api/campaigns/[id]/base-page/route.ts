@@ -1,3 +1,4 @@
+import { requirePaidCampaign } from '@/lib/billing/entitlements';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { serviceClient } from '@/lib/supabase';
 
@@ -50,6 +51,7 @@ export async function POST(
     }
 
     if (action === 'approve') {
+      await requirePaidCampaign(id);
       const { error } = await db.from('campaigns').update({
         // Pictures next, then the twenty. Nothing was illustrated before this
         // point on purpose: the slots on the page above are what was approved,

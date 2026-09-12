@@ -983,7 +983,7 @@ export function CampaignProgress({ id }: { id: string }) {
           {awaitingApproval && basePage ? (
             <BasePageReview
               page={basePage}
-              slug={campaign.slug}
+              campaignId={id}
               host={hostOf(campaign.source_url) ?? hostOf(basePage.cta_url)}
               target={target}
               lastGuidance={campaign.base_page_guidance}
@@ -1669,10 +1669,10 @@ function Bullet({
  * fields reads like a database row rather than like the thing a buyer will see.
  */
 function BasePageReview({
-  page, slug, host, target, lastGuidance, foundPhotos, onDecide,
+  page, campaignId, host, target, lastGuidance, foundPhotos, onDecide,
 }: {
   page: BasePageView;
-  slug: string;
+  campaignId: string;
   /** The shop's address, as the page preview's small print. */
   host: string | null;
   /** How many pages this campaign is writing. Five for a vehicle. */
@@ -1843,7 +1843,7 @@ function BasePageReview({
           {editing ? 'Not now' : 'Edit the words first'}
         </button>
         <a
-          href={`/p/${slug}`}
+          href={`/campaigns/${campaignId}/preview`}
           target="_blank"
           rel="noopener"
           className="px-1.5 py-3 text-sm font-semibold text-zinc-500 hover:text-zinc-900"

@@ -1,3 +1,5 @@
+import { reserveResource, settleResource } from '@/lib/billing/entitlements';
+import { recordModelUsage } from '@/lib/usage';
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import type { z } from 'zod';
@@ -8,7 +10,7 @@ import type { z } from 'zod';
  * Four decisions worth stating, because they are not obvious from the code:
  *
  * 1. STRUCTURED OUTPUTS, NOT "reply with JSON". Every call goes through
- *    `responses.parse()` with a Zod schema, so the model is constrained to the
+ *    `responses.create()` plus Zod validation with a Zod schema, so the model is constrained to the
  *    shape and the SDK validates before we ever see it. A prompt that asks for
  *    JSON produces a fence, an apology or a trailing comma often enough to
  *    matter across 20 personas.
@@ -59,7 +61,7 @@ function client(): OpenAI {
     // extra header is needed. An org key that belongs to several projects does
     // need one, and naming it here means either kind of key works.
     const project = process.env.OPENAI_PROJECT_ID;
-    _client = new OpenAI(project ? { project } : {});
+    _client = new OpenAI({ ...(project ? { project } : {}), maxRetries: 0 });
   }
   return _client;
 }
@@ -125,7 +127,15 @@ export async function generate<S extends z.ZodType>(
     })),
   ];
 
-  const response = await client().responses.parse({
+  // Reserve the maximum configured output and a conservative input bound.
+  // UTF-8 bytes upper-bound text tokens. Image budget is deliberately generous.
+  const inputBound = Buffer.byteLength(instructions + opts.prompt, 'utf8') + (opts.images?.length ?? 0) * 3000;
+  if (inputBound > 272000) throw new Error('This generation exceeds the supported input budget');
+  if (!/^gpt-5\.5(?:-\d{4}-\d{2}-\d{2})?$/.test(MODEL)) throw new Error('Configure verified pricing before changing the generation model');
+  const apiClient = client();
+  const reservation = await reserveResource('text', (inputBound * 5 + (maxContent + REASONING_HEADROOM) * 30) / 1_000_000);
+  // Unknown network outcomes keep the reservation; never pretend they were free.
+  const response = await apiClient.responses.create({
     model: MODEL,
     instructions,
     input: [{ role: 'user', content }],
@@ -133,6 +143,20 @@ export async function generate<S extends z.ZodType>(
     max_output_tokens: maxContent + REASONING_HEADROOM,
     text: { format: zodTextFormat(opts.schema, 'result') },
   });
+
+  // Capture billable usage before checking refusal/incomplete output: those
+  // responses can still cost money even though no usable copy was returned.
+  if (response.usage) await recordModelUsage({
+    responseId: response.id, model: response.model,
+    input: response.usage.input_tokens,
+    cached: response.usage.input_tokens_details?.cached_tokens ?? 0,
+    output: response.usage.output_tokens, status: response.status ?? 'unknown',
+  });
+
+  if (response.usage) await settleResource(reservation, false,
+    ((response.usage.input_tokens - (response.usage.input_tokens_details?.cached_tokens ?? 0)) * 5
+      + (response.usage.input_tokens_details?.cached_tokens ?? 0) * 0.5
+      + response.usage.output_tokens * 30) / 1_000_000);
 
   // A refusal is a successful HTTP call with no usable content. Checking for it
   // first means we fail with the reason rather than a null deref.
@@ -152,16 +176,14 @@ export async function generate<S extends z.ZodType>(
       + 'so it was discarded rather than half-saved.',
     );
   }
-  if (!response.output_parsed) {
+  const parsed = opts.schema.safeParse(JSON.parse(response.output_text || 'null'));
+  if (!parsed.success) {
     throw new Error('The model returned nothing that matched the schema');
   }
 
   const usage = response.usage;
   return {
-    // The SDK infers the parsed type through its own alias, which TypeScript
-    // cannot prove equals `z.infer<S>` while S is still generic. Same type,
-    // narrowed by the same schema — the assertion is the proof.
-    data: response.output_parsed as z.infer<S>,
+    data: parsed.data as z.infer<S>,
     usage: {
       input: usage?.input_tokens ?? 0,
       output: usage?.output_tokens ?? 0,

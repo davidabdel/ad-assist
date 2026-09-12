@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { serviceClient } from '@/lib/supabase';
+import { pollCampaignAssets } from '@/lib/pipeline/assets';
 import { advance } from '@/lib/pipeline/advance';
 
 export const dynamic = 'force-dynamic';
@@ -109,10 +110,29 @@ type Driven = {
 
 async function tick(only?: string): Promise<Response> {
   const db = serviceClient();
+  await db.from('service_heartbeats').upsert({ name: 'tick', seen_at: new Date().toISOString() });
   const startedAt = Date.now();
 
+  // Finish accepted provider jobs even when the customer has closed the tab.
+  // The shared campaign lock prevents two drivers submitting a follow-up video.
+  let mediaQuery = db.from('media_usage').select('campaign_id')
+    .in('state', ['submitted', 'generating']).not('campaign_id', 'is', null)
+    .order('created_at', { ascending: true }).limit(100);
+  if (only) mediaQuery = mediaQuery.eq('campaign_id', only);
+  const { data: pendingMedia, error: mediaError } = await mediaQuery;
+  if (mediaError) return Response.json({ error: mediaError.message }, { status: 500 });
+  const media = [];
+  for (const id of [...new Set((pendingMedia ?? []).map(row => row.campaign_id as string))].slice(0, MAX_CAMPAIGNS)) {
+    if (Date.now() - startedAt > BUDGET_MS) break;
+    try {
+      media.push({ id, ...await pollCampaignAssets(id) });
+    } catch (error) {
+      media.push({ id, error: (error as Error).message });
+    }
+  }
+
   let query = db.from('campaigns')
-    .select('*').in('status', DRIVABLE);
+    .select('*').in('status', DRIVABLE).is('archived_at', null);
   // One campaign rather than everything with somewhere to go. Nothing needs
   // this in normal running — the poker has no idea which campaigns exist — but
   // a check that drove every drivable row would drive the real ones, with real
@@ -205,6 +225,7 @@ async function tick(only?: string): Promise<Response> {
 
   return Response.json({
     driven,
+    media,
     looked_at: candidates.length,
     took_ms: Date.now() - startedAt,
   });

@@ -1,3 +1,4 @@
+import { publicFetch } from './public-fetch';
 // linkedom, not jsdom, and the reason is production-only: Next treats jsdom as an
 // external package, so the serverless function `require()`s it — and jsdom now
 // pulls in an ESM-only encoding sniffer, which cannot be required. The build is
@@ -98,7 +99,7 @@ export type CloudIngestResult = {
 };
 
 async function get(url: string, headers: Record<string, string>, ms: number) {
-  return fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(ms) });
+  return publicFetch(url, headers, ms);
 }
 
 /** Shopify serves /products/<handle>.js as text/javascript, NOT json. */
@@ -119,7 +120,7 @@ async function fetchShopifyProduct(url: string) {
 
 export async function ingestProductFromServer(url: string): Promise<CloudIngestResult> {
   const warnings: string[] = [];
-  let res: Response;
+  let res: Awaited<ReturnType<typeof publicFetch>>;
   let html: string;
 
   try {

@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { AuthError, requireOwner } from '@/lib/auth';
 import { serviceClient } from '@/lib/supabase';
@@ -58,6 +59,17 @@ export async function POST(req: Request) {
     const input = parsed.data;
 
     const kind = spec(input.product_type);
+    // Only the server's saved result can seed a campaign. A client cannot
+    // supply fabricated scrape data, and changing the URL invalidates reuse.
+    const scanId = (await cookies()).get('adtocart-free-scan')?.value;
+    let scanned = null;
+    if (scanId && input.source_url && input.product_type === 'ecom') {
+      const { data: scan } = await serviceClient().from('free_scans')
+        .select('payload').eq('id', scanId).eq('source_url', input.source_url)
+        .gt('expires_at', new Date().toISOString()).maybeSingle();
+      scanned = scan?.payload ?? null;
+    }
+
 
     const { data, error } = await serviceClient().from('campaigns').insert({
       user_id: owner.id,
@@ -78,11 +90,14 @@ export async function POST(req: Request) {
       // campaign that is halfway through writing five pages must not silently
       // become a twenty-page campaign because the default moved under it.
       persona_target: kind.personaTarget,
-      status: 'pending',
+      ...(scanned ? { scraped_data: { raw: scanned } } : {}),
+      status: scanned ? 'scraping' : 'pending',
     }).select().single();
 
     if (error) return Response.json({ error: error.message }, { status: 500 });
 
+    if (scanned && scanId) await serviceClient().from('product_events')
+      .update({ user_id: owner.id, campaign_id: data.id }).eq('scan_id',scanId).is('user_id',null);
     return Response.json({
       campaign: data,
       next: `POST /api/campaigns/${data.id}/advance to start the pipeline`,

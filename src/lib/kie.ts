@@ -1,3 +1,5 @@
+import { reserveResource, settleResource } from '@/lib/billing/entitlements';
+import { serviceClient } from '@/lib/supabase';
 /**
  * KIE.ai — the only place in this app that spends money.
  *
@@ -116,9 +118,12 @@ export const VIDEO_SECONDS = 10;
 export type SubmitResult = { taskId: string };
 
 async function post(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const apiKey = key();
+  const model = (body as { model?: string }).model;
+  const reservation = await reserveResource(model === VIDEO_MODEL ? 'video' : 'image', 1);
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(60_000),
   });
@@ -134,7 +139,13 @@ async function post(path: string, body: unknown): Promise<Record<string, unknown
   // a submitted one is the expensive case to be wrong about.
   const code = Number(json.code ?? res.status);
   if (code !== 200) {
+    if (code >= 400 && code < 500) await settleResource(reservation, true);
     throw new Error(`KIE refused the task (${code}): ${String(json.msg ?? 'no reason given')}`);
+  }
+  const taskId = (json.data as { taskId?: string } | undefined)?.taskId;
+  if (taskId) {
+    const { error } = await serviceClient().from('usage_reservations').update({ task_id: taskId, state: 'consumed' }).eq('id', reservation);
+    if (error) console.error('media_reservation_link_failed', taskId);
   }
   return json;
 }

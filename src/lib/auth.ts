@@ -51,6 +51,9 @@ export async function requireOwner(req: Request): Promise<Owner> {
   if (upsertError) {
     throw new AuthError(`Could not establish the owner record: ${upsertError.message}`, 500);
   }
+  // Throttled write makes activity reflect authenticated product use.
+  await svc.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id',id)
+    .or(`last_seen_at.is.null,last_seen_at.lt.${new Date(Date.now()-15*60*1000).toISOString()}`);
   return { id, email };
 }
 

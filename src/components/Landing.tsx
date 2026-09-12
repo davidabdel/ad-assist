@@ -5,7 +5,7 @@ import { Logo } from '@/components/ui';
 
 /**
  * adtocart.cc — the page that sells the app. Every call to action goes to the
- * wizard, which goes through login first when nobody is signed in.
+ * free product scan, which shows the result before asking for an account.
  *
  * The six hero ads are real: Buzz Cleaning copy and photos from a live
  * campaign, kept as the launch demo. The six buyers under "The problem" are
@@ -15,7 +15,7 @@ import { Logo } from '@/components/ui';
  * inside the app, after sign-up.
  */
 
-const START = '/campaigns?new=1';
+const START = '/start';
 
 const HERO_ADS = [
   { img: '/brand/buzz-grapes.png', pos: '50% 60%', text: 'Gentle enough to clean fruit and veg without rinsing. Made from water, salt and vinegar.', headline: 'Spray it on the grapes', cta: 'Shop Now' },
@@ -49,7 +49,7 @@ const BUYERS = [
 ];
 
 const STEPS = [
-  ['01', 'It reads your product page', 'Features, price and the actual customer reviews, straight off the page, in about a second.'],
+  ['01', 'It reads your product page', 'Start with a free scan of your product details and readable reviews. See the result, then create your account.'],
   ['02', 'It writes the main page — you approve it', 'The one checkpoint. Seven of its ten reasons are copied onto every buyer page, so a mistake here is a mistake twenty times.'],
   ['03', 'Twenty buyers who do not overlap', "Each gets a real landing page on its own URL, in your brand's colours, arguing the case that buyer cares about."],
   ['04', "It reads Meta's ad library", 'Only ads live between three months and a year. It keeps the shape, never the words.'],
@@ -64,7 +64,7 @@ const STATS = [
 
 const LIMITS = [
   ['It does not publish to Meta', 'The output is copy, pictures and URLs you paste into Ads Manager.'],
-  ['"Winning ad" is a proxy, not a measurement', 'Meta gives out no performance data for commercial ads. Still active after 90 days is the best evidence that exists.'],
+  ['"Winning ad" is a proxy, not a measurement', 'Meta gives out no performance data for commercial ads. Still active after 90 days is a research signal, not verified profitability.'],
   ['It never invents a photograph of your product', 'A picture slot with no honest source stays empty rather than borrowing an unrelated photo.'],
   ['Testimonials only come from real reviews', 'No reviews found means no testimonial section, and it warns you before you approve.'],
   ["It refuses to write twenty buyers that aren't really different", 'Some products do not have twenty. It stops and says so.'],
@@ -80,6 +80,7 @@ export function Landing() {
         <div className="mx-auto flex max-w-[1180px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-3.5 sm:px-7">
           <Link href="/" aria-label="adtocart.cc home"><Logo size={36} /></Link>
           <nav className="order-3 flex flex-[1_0_100%] flex-wrap justify-center gap-x-6 gap-y-2.5 text-sm font-semibold text-zinc-500 lg:order-none lg:flex-none">
+            <Link href="/pricing" className="whitespace-nowrap hover:text-zinc-900">Pricing</Link>
             <a href="#how" className="whitespace-nowrap hover:text-zinc-900">How it works</a>
             <a href="#proof" className="whitespace-nowrap hover:text-zinc-900">Why these ads</a>
             <a href="#limits" className="whitespace-nowrap hover:text-zinc-900">What it won&rsquo;t do</a>
@@ -92,7 +93,7 @@ export function Landing() {
               href={START}
               className="whitespace-nowrap rounded-full bg-zinc-900 px-5 py-[11px] text-sm font-bold text-white transition-colors hover:bg-accent"
             >
-              Start a campaign
+              Start for free
             </Link>
           </div>
         </div>
@@ -236,9 +237,9 @@ export function Landing() {
               href={START}
               className="rounded-full bg-white px-[26px] py-[15px] text-[15px] font-extrabold text-zinc-900 transition-colors hover:bg-teal"
             >
-              See the wizard →
+              Try the free scan →
             </Link>
-            <span className="text-sm text-[#93A1B1]">Five questions, about ninety seconds.</span>
+            <span className="text-sm text-[#93A1B1]">See your product details before you sign up.</span>
           </div>
         </div>
       </section>
@@ -260,11 +261,11 @@ export function Landing() {
         </div>
         <div className="flex min-w-0 flex-col gap-[22px]">
           <div className={eyebrow}>Why these ads</div>
-          <h2 className={h2}>It copies the shape of ads that have been paying for themselves for months.</h2>
+          <h2 className={h2}>It studies the shape of ads that have been running for months.</h2>
           <p className="m-0 text-[17px] leading-[1.65] text-zinc-600">
             Then it scans the Meta ad library for ads that have been running live for between three
             months and a year — because Meta publishes no spend or impression data for commercial
-            ads, and an ad still running after a quarter is running because it pays for itself.
+            ads, and longevity is a research signal, not proof that an ad is profitable.
           </p>
           <p className="m-0 text-[17px] leading-[1.65] text-zinc-500">
             It reads those for <em>format</em>: the hook, the order the argument arrives in, where the
@@ -320,7 +321,7 @@ export function Landing() {
               href={START}
               className="rounded-full bg-white px-[30px] py-[17px] text-base font-extrabold text-zinc-900 transition-colors hover:bg-teal"
             >
-              Start a campaign →
+              Start for free →
             </Link>
             <Link
               href="/login"

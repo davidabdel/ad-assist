@@ -62,6 +62,7 @@ export function TopBar({ right, progress }: { right?: ReactNode; progress?: numb
           <Logo size={36} />
         </Link>
         <div className="flex min-w-0 items-center gap-4 text-[13px] text-zinc-500">
+          <Link href="/billing" className="shrink-0 font-semibold text-accent">Plans and billing</Link>
           {right ?? <span className="hidden truncate sm:inline">{email}</span>}
           <button
             type="button"

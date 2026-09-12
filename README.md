@@ -130,3 +130,47 @@ a human).
   only gate, and the anon key ships in the browser on every `/p/` page.
 - **`AD_ASSIST_MODEL`, not `OPENAI_MODEL`.** Agent harnesses export the latter
   with internal aliases the public API rejects.
+
+
+## SaaS launch work (12 September 2026)
+
+See [the launch analysis](docs/SAAS_LAUNCH_ANALYSIS.md) for the pricing model,
+hosting/attribution decisions, acquisition plan and remaining paid-beta work.
+
+The new `/start` flow reads a public product before signup. It requires migration
+`0020_free_scan.sql` and a random `FREE_SCAN_SECRET` of at least 32 bytes. Without
+that setting it fails closed. Limits are shared through Supabase: three attempts
+per IP hash per day, 500 globally. Failed fetches still count. Successful scans
+are reusable for 24 hours in the same browser and only for the same product URL.
+A signed-in campaign uses the server's stored payload, never client-supplied data.
+The public reader pins checked IPv4 addresses and bounds redirects/response size;
+IPv6-only stores are unsupported. Production rate limiting currently expects
+Vercel's trusted `x-vercel-forwarded-for` header.
+
+Migration `0021_model_usage.sql` records model response usage and estimated USD
+cost. Main pipeline calls have campaign/stage attribution; other calls are
+unassigned. Unknown model prices remain null. This is reporting, not billing or
+an entitlement gate. Text generation costs money before media approval.
+
+Deploy migrations before enabling the endpoint. Configure Supabase's email
+redirect allow-list for the intended application origin and verify a fresh
+signup/confirmation in a preview environment. No new production credentials or
+billing products are provisioned by these changes.
+
+Local checks:
+
+```sh
+node --experimental-strip-types --test scripts/free-scan-check.mjs
+npx tsc --noEmit
+npm run build -- --webpack
+```
+
+The network tests use mock responses and do not buy AI generation. Live Supabase
+quota concurrency, email confirmation and scan-to-campaign reuse still require
+an integration test against the configured preview project.
+
+## SaaS billing and owner dashboard
+
+See [SaaS operations](docs/SAAS_OPERATIONS.md) for migrations 0022–0026, USD plan configuration, Stripe webhooks, admin password setup and rollout requirements. `/admin` provides protected account, subscription, activity and provider-cost reporting. `/billing` manages customer plans and allowances. All provider submissions now reserve account allowances; confirmed usage is attributed to the account. The authenticated background tick also finishes pending media jobs without an open customer tab.
+
+Run `npm run test:saas` for isolated database, access-control and request-signature checks. Live checkout, email and provider reconciliation still require a configured preview environment.

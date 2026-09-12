@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {createHmac,scryptSync} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+import {checkPassword,signAdmin,verifyAdmin} from '../src/lib/admin-session.ts';
+// Compile the small Stripe adapter in memory; its only relative dependency is
+// the public plan catalog. Tests never make provider requests.
+const encode=s=>'data:text/javascript;base64,'+Buffer.from(s).toString('base64');
+const compile=s=>ts.transpileModule(s,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
+const plans=encode(compile(await readFile('src/lib/billing/plans.ts','utf8')));
+const source=(await readFile('src/lib/billing/stripe.ts','utf8')).replace("'./plans'",JSON.stringify(plans));
+const {verifyStripeSignature,subscriptionSnapshot}=await import(encode(compile(source)));
+const salt='a'.repeat(32),password='long-test-password-only',hash=`${salt}:${scryptSync(password,salt,64).toString('hex')}`,secret='b'.repeat(64),now=Date.now();
+assert.equal(checkPassword(password,hash),true);assert.equal(checkPassword('wrong',hash),false);
+const session=signAdmin(secret,hash,now);
+assert.equal(verifyAdmin(session,secret,hash,now),true);
+assert.equal(verifyAdmin(session,secret,hash,now+9*3600000),false);
+assert.equal(verifyAdmin(session+'x',secret,hash,now),false);
+assert.equal(verifyAdmin(session,secret,'rotated-password',now),false);
+assert.equal(verifyAdmin(session,'new-secret'.repeat(5),hash,now),false);
+const body='{"id":"evt_test"}',stamp=Math.floor(now/1000);
+const sig=createHmac('sha256',secret).update(`${stamp}.${body}`).digest('hex');
+assert.equal(verifyStripeSignature(body,`t=${stamp},v1=${sig}`,secret,now),true);
+assert.equal(verifyStripeSignature(body+' ',`t=${stamp},v1=${sig}`,secret,now),false);
+assert.equal(verifyStripeSignature(body,`t=${stamp},v1=${sig}`,secret,now+301000),false);
+assert.equal(verifyStripeSignature(body,`t=${stamp},v1=bad`,secret,now),false);
+process.env.STRIPE_PRICE_STARTER='price_starter';
+const sub={id:'sub_1',customer:'cus_1',status:'active',cancel_at_period_end:true,metadata:{},items:{data:[{quantity:1,current_period_start:stamp,current_period_end:stamp+86400,price:{id:'price_starter',currency:'usd',unit_amount:14900,recurring:{interval:'month',interval_count:1}}}]}};
+assert.equal(subscriptionSnapshot(sub).mrr_usd,149);
+assert.equal(subscriptionSnapshot({...sub,status:'canceled'}).mrr_usd,0);
+assert.throws(()=>subscriptionSnapshot({...sub,items:{data:[{...sub.items.data[0],quantity:2}]}}),/supported plan/);
+assert.throws(()=>subscriptionSnapshot({...sub,items:{data:[{...sub.items.data[0],price:{...sub.items.data[0].price,unit_amount:1}}]}}),/supported plan/);
+console.log('PASS: admin password verification, cookie tamper/expiry/rotation, webhook signature/replay window, plan price validation');

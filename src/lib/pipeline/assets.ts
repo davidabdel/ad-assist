@@ -1,3 +1,4 @@
+import { usageContext } from '@/lib/usage';
 import { serviceClient } from '@/lib/supabase';
 import { asDataUrl } from './image-bytes';
 import { BUCKET, publicUrlFor } from '@/lib/uploads';
@@ -137,6 +138,9 @@ export type ApproveResult = {
  * rather than a code; the caller turns that into an HTTP status.
  */
 export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult> {
+  return usageContext.run({ campaignId: idea.campaign_id, stage: 'approveIdea' }, () => approveIdeaInner(idea));
+}
+async function approveIdeaInner(idea: IdeaRowForSubmit): Promise<ApproveResult> {
   const db = serviceClient();
   const attempt = Math.max(1, Math.round(Number(idea.attempt ?? 1)));
 
@@ -429,6 +433,9 @@ export async function approveIdea(idea: IdeaRowForSubmit): Promise<ApproveResult
  * ceiling is enforced here exactly as it is on Approve.
  */
 export async function makePicture(idea: IdeaRowForSubmit): Promise<ApproveResult> {
+  return usageContext.run({ campaignId: idea.campaign_id, stage: 'makePicture' }, () => makePictureInner(idea));
+}
+async function makePictureInner(idea: IdeaRowForSubmit): Promise<ApproveResult> {
   const db = serviceClient();
   const attempt = Math.max(1, Math.round(Number(idea.attempt ?? 1)));
 
@@ -688,6 +695,17 @@ export type PollResult = {
  */
 export async function pollCampaignAssets(campaignId: string): Promise<PollResult> {
   const db = serviceClient();
+  const { data: claimed, error } = await db.rpc('claim_persona_batch', { p_campaign: campaignId });
+  if (error) throw new Error(`Could not claim media polling: ${error.message}`);
+  if (!claimed) return { checked: 0, finished: 0, failed: 0, notes: ['Campaign is busy; polling will retry.'] };
+  try {
+    return await usageContext.run({ campaignId, stage: 'media-followup' }, () => pollCampaignAssetsInner(campaignId));
+  } finally {
+    await db.rpc('release_persona_batch', { p_campaign: campaignId });
+  }
+}
+async function pollCampaignAssetsInner(campaignId: string): Promise<PollResult> {
+  const db = serviceClient();
   const notes: string[] = [];
 
   const { data: ideas } = await db.from('ad_ideas')
@@ -736,7 +754,7 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
       await db.from('generated_assets').update({
         state: 'fail',
         fail_reason: status.failMessage ?? 'KIE reported the task failed and gave no reason.',
-        credits_charged: 0,
+        credits_charged: status.creditsConsumed ?? null,
         completed_at: new Date().toISOString(),
       }).eq('id', asset.id);
       await db.from('ad_ideas').update({
@@ -746,20 +764,20 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
         status: isPreview ? 'draft' : 'failed',
         rejected_reason: isPreview
           ? `The picture could not be drawn (${status.failMessage ?? 'KIE gave no reason'}). `
-            + 'Nothing was charged. Try it again, or rewrite the instruction first.'
+            + 'Check your usage before retrying, or rewrite the instruction first.'
           : isFrame
           ? `The picture the video opens on could not be made (${status.failMessage ?? 'KIE gave no reason'}), `
-            + 'so the video was never started. Neither was charged.'
+            + 'so the video was never started. The frame charge will be reconciled from provider usage.'
           : status.failMessage ?? 'The generation failed at KIE.',
       }).eq('id', asset.ad_idea_id);
       // A failed task is not billed, so the reservation comes back rather than
       // sitting against the ceiling forever. A frame takes the video's
       // reservation down with it: that video is not going to be submitted.
-      await db.from('spend_log').delete().eq('asset_id', asset.id);
+      if (status.creditsConsumed === 0) await db.from('spend_log').delete().eq('asset_id', asset.id);
       if (asset.pending_spend_id) {
         await db.from('spend_log').delete().eq('id', asset.pending_spend_id);
       }
-      notes.push(`One ad failed at KIE: ${status.failMessage ?? 'no reason given'}. It was not charged.`);
+      notes.push(`One ad failed at KIE: ${status.failMessage ?? 'no reason given'}. ${status.creditsConsumed === 0 ? 'The provider confirmed zero credits charged.' : 'Check the provider charge before retrying.'}`);
       continue;
     }
 
@@ -804,7 +822,7 @@ export async function pollCampaignAssets(campaignId: string): Promise<PollResult
     // a delete and an insert — rather than an update, so the ledger only ever
     // holds figures that came from KIE once a task has finished.
     if (status.creditsConsumed != null) {
-      await db.from('spend_log').delete().eq('asset_id', asset.id);
+      if (status.creditsConsumed === 0) await db.from('spend_log').delete().eq('asset_id', asset.id);
       await db.from('spend_log').insert({
         campaign_id: campaignId,
         asset_id: asset.id,
