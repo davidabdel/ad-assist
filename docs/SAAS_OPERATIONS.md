@@ -110,3 +110,10 @@ With the local Supabase services running, `ADTOCART_TEST_STRIPE=1 node scripts/s
 Provider-backed Stripe tests passed on 12 September 2026: checkout retry idempotency, no access before payment, subscription and invoice reconciliation, dedicated portal configuration, actual test refund with duplicate delivery, plan changes, scheduled cancellation and final cancellation. Hosted webhook transport, customer browser payment entry and video-pack payment completion remain unverified.
 
 Hosting launch decision: the existing Vercel team is Hobby. Vercel restricts that plan to personal non-commercial use (https://vercel.com/docs/limits/fair-use-guidelines). A commercial launch needs an appropriate hosting plan or a compatible alternate host. Supabase can remain Free independently. No hosting upgrade has been purchased.
+
+
+## Current launch decisions and email blocker
+
+Owner decision: keep Vercel and upgrade its plan before commercial launch; keep Supabase Free. Do not migrate hosts or buy an upgrade during preparation.
+
+Read-only hosted Auth check on 12 September 2026: email signup enabled, email confirmation required, production site/redirect URLs configured, Google provider disabled, and no custom SMTP configured. Public email onboarding requires a transactional email provider and verified sender domain before launch. No hosted settings were changed by this check.
