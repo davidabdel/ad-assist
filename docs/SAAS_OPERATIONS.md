@@ -117,3 +117,6 @@ Hosting launch decision: the existing Vercel team is Hobby. Vercel restricts tha
 Owner decision: keep Vercel and upgrade its plan before commercial launch; keep Supabase Free. Do not migrate hosts or buy an upgrade during preparation.
 
 Read-only hosted Auth check on 12 September 2026: email signup enabled, email confirmation required, production site/redirect URLs configured, Google provider disabled, and no custom SMTP configured. Public email onboarding requires a transactional email provider and verified sender domain before launch. No hosted settings were changed by this check.
+
+
+SMTP configured 13 September 2026 using the owner’s existing ImprovMX subscription: notifications@adtocart.cc, sender AdtoCart, smtp.improvmx.com:587 (TLS). Non-secret settings verified through the Supabase Management API after saving. ImprovMX reports MX, SPF and both DKIM records valid; DMARC is p=none. End-to-end delivery still awaits an authorized test message and recipient confirmation. Existing david@adtocart.cc credential was preserved.
