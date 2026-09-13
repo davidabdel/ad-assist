@@ -37,7 +37,7 @@ Billing webhooks must be monitored and replayed on failure. Current provider sta
 
 ## Deployment order
 
-1. Back up the intended Supabase database. Apply only unapplied migrations, in order: 0020–0026 for this branch. Do not rerun the historical initialization on an existing project. The existing helper accepts explicit migration filenames.
+1. Back up the intended Supabase database. Apply only unapplied migrations, in order: 0020–0027 for this branch. Do not rerun the historical initialization on an existing project. The existing helper accepts explicit migration filenames.
 2. Configure existing Supabase/OpenAI/KIE settings and the canonical HTTPS `NEXT_PUBLIC_SITE_URL` in the target deployment. New paid generation requires billing tables; deploy migrations first.
 3. Generate a random `FREE_SCAN_SECRET`. On Vercel, the trusted forwarded header supplies rate-limit identity. Other production hosts require an explicitly configured trusted gateway; arbitrary client-supplied forwarded headers are never trusted.
 4. Run `node scripts/admin-password.mjs` in your terminal. Choose at least 16 characters. Save the generated `ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` into server-side deployment settings. The script does not echo or save your plaintext password. Do not paste credentials into the repository or conversation. Rotating either setting invalidates existing admin sessions.
@@ -140,7 +140,7 @@ Release gates, in order:
 - Resolve access for the two existing owner campaigns.
 - Obtain and verify a restorable production database backup before migrations.
 - Configure the target's admin credentials, scan secret, Stripe test catalog/portal and webhook transport.
-- Apply only missing migrations 0020–0026, plus an explicit owner-entitlement migration if authorized.
+- Apply only missing migrations 0020–0027 and the approved owner publishing grants.
 - Deploy the feature branch, validate the hosted non-generating customer and billing journeys, and enable the VPS worker against the matching deployment.
 - Review live Stripe merchant setup and operational policies; switch to live billing only when those gates pass.
 - Upgrade Vercel before commercial launch, per the owner's earlier decision.
@@ -148,3 +148,8 @@ Release gates, in order:
 The paid-generation journey remains unverified if skipped. Scanner-only checks do not establish full SaaS launch readiness.
 
 Owner decision: preserve public access to Buzz Cleaning and Pointtaken without a paid subscription. Migration `0027_owner_publishing.sql` adds explicit campaign-scoped publishing grants. After backup and migrations, apply `supabase/operations/grant-owner-publishing.sql` to the intended production database; it refuses to proceed unless both expected owner campaigns exist. Grants are bound to the campaign and its owner, respect archiving, and can be revoked by deleting the grant. They do not grant AI usage, new campaigns, or paid-plan revenue. Isolated PostgreSQL checks cover access, revocation, archiving, unchanged MRR and denied paid generation. This change is prepared locally; production grants are not yet applied.
+
+
+Production database release completed on 13 September 2026. A 7,600,552-byte PostgreSQL custom archive covering public, auth and storage metadata was saved privately under `.scratch/backups/pre-saas-20260913.dump` (SHA-256 `e8b8c09542b54572090acedac0fdedd20613a9cf3d8ebf354d79a9a4508be5e1`). This database backup does not contain Storage object file bytes. Archive decoding passed. The archive was restored into an isolated PostgreSQL 17 container with no external network or published ports; standard schema usage permissions were reproduced because the rehearsal omitted platform-owned ACLs. All eight migrations 0020–0027 and the approved owner grants committed successfully on that restored copy. Visitor access to both owner pages passed. The temporary restored database and volume were then deleted.
+
+The exact rehearsed migration batch and owner grants were applied to production in one transaction after refreshing the CLI's short-lived credential. The initial expired-credential attempt executed no SQL. Production verification: two billing accounts, zero MRR, two owner publishing grants, both public page RPCs return pages, and anonymous schema usage is present. No AI generation or real payment ran. The frontend release and its deployment secrets are still pending; database readiness alone is not launch readiness. The project has no historical Supabase CLI migration ledger, so do not blindly run `db push` or reapply the release batch.
