@@ -63,8 +63,23 @@ await db.query(`insert into subscription_history(user_id,event_id,happened_at,pl
 await db.query('select apply_subscription($1,$2,$3,$4)',['evt_cancel',200,uid,JSON.stringify({...snap,status:'canceled',mrr_usd:0})]);
 const churn=(await db.query('select admin_metrics()')).rows[0].admin_metrics.churn;
 assert.equal(churn.opening_customers,1);assert.equal(churn.lost_customers,1);assert.equal(churn.customer_rate,1);
+// Owner publishing grants are campaign-scoped and never grant paid resources.
+await db.query(`insert into base_pages(campaign_id,page_title,hero_headline,reasons,offer_headline,cta_button_text,cta_url)
+ values($1,'Owner page','Owner headline','[]','Offer','Visit','https://example.com')`,[paid]);
+assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get_public_page,null);
+await db.query("insert into campaign_publishing_grants(campaign_id,user_id,reason) values($1,$2,'Approved owner campaign')",[paid,uid]);
+assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get_public_page.page_title,'Owner page');
+assert.equal((await db.query("select get_public_page('trial',null)")).rows[0].get_public_page,null);
+assert.equal(Number((await db.query('select mrr_usd from billing_accounts where user_id=$1',[uid])).rows[0].mrr_usd),0);
+await assert.rejects(db.query("select reserve_saas_resource($1,'image',1)",[paid]),/active subscription/);
+await db.query('update campaigns set archived_at=now() where id=$1',[paid]);
+assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get_public_page,null);
+await db.query('update campaigns set archived_at=null where id=$1',[paid]);
+await db.query('delete from campaign_publishing_grants where campaign_id=$1',[paid]);
+assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get_public_page,null);
 await db.exec('set role anon');
 await assert.rejects(db.query('select * from billing_accounts'),/permission denied/);
+await assert.rejects(db.query('select * from campaign_publishing_grants'),/permission denied/);
 await assert.rejects(db.query('select admin_metrics()'),/permission denied/);
 await db.exec('reset role');
 console.log('PASS: signup sync, single trial, build/image limits, refunds, payment idempotency, stale events, ledger aggregation, refund replay, pagination, concurrent budgets, churn cohorts, admin isolation');

@@ -146,3 +146,5 @@ Release gates, in order:
 - Upgrade Vercel before commercial launch, per the owner's earlier decision.
 
 The paid-generation journey remains unverified if skipped. Scanner-only checks do not establish full SaaS launch readiness.
+
+Owner decision: preserve public access to Buzz Cleaning and Pointtaken without a paid subscription. Migration `0027_owner_publishing.sql` adds explicit campaign-scoped publishing grants. After backup and migrations, apply `supabase/operations/grant-owner-publishing.sql` to the intended production database; it refuses to proceed unless both expected owner campaigns exist. Grants are bound to the campaign and its owner, respect archiving, and can be revoked by deleting the grant. They do not grant AI usage, new campaigns, or paid-plan revenue. Isolated PostgreSQL checks cover access, revocation, archiving, unchanged MRR and denied paid generation. This change is prepared locally; production grants are not yet applied.
