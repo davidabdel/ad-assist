@@ -1,0 +1,7 @@
+.git
+.scratch
+.shots
+.env*
+node_modules
+.next
+scanner/node_modules
