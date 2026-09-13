@@ -128,3 +128,21 @@ Authorized live email test on 13 September 2026: Supabase accepted the signup em
 The test recipient completed confirmation: a read-only Auth check verified email_confirmed_at and last_sign_in_at for david@adtocart.cc. The signup-email gate is now verified through SMTP delivery and account confirmation.
 
 Scanner server preparation is in [SCANNER_HOSTING.md](SCANNER_HOSTING.md). Linux/headless configuration, a non-root container recipe, bounded tick requests and graceful worker shutdown are implemented. The owner selected the existing Contabo VPS. Docker and the complete scanner image are prepared; Chromium reports active namespace and Seccomp-BPF sandboxing. Store scanning, queued pipeline and recovery checks are tracked in the hosting document. No production worker is activated.
+
+## Release preparation — 13 September 2026
+
+The owner declined the proposed paid AI end-to-end test. Do not run paid generation for validation without renewed authorization. This is a skipped validation gate, not a passing result.
+
+Production still serves commit `4e8ed63` on `main`; the SaaS feature branch is not deployed. Read-only rollout inventory found two accounts and two campaigns. Both campaigns, Buzz Cleaning and Pointtaken, belong to the owner's uconnect account. Their treatment under subscription gating is awaiting the owner's decision. No customer data or subscription entitlements were changed during this inventory.
+
+Release gates, in order:
+
+- Resolve access for the two existing owner campaigns.
+- Obtain and verify a restorable production database backup before migrations.
+- Configure the target's admin credentials, scan secret, Stripe test catalog/portal and webhook transport.
+- Apply only missing migrations 0020–0026, plus an explicit owner-entitlement migration if authorized.
+- Deploy the feature branch, validate the hosted non-generating customer and billing journeys, and enable the VPS worker against the matching deployment.
+- Review live Stripe merchant setup and operational policies; switch to live billing only when those gates pass.
+- Upgrade Vercel before commercial launch, per the owner's earlier decision.
+
+The paid-generation journey remains unverified if skipped. Scanner-only checks do not establish full SaaS launch readiness.
