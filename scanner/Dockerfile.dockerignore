@@ -1,0 +1,10 @@
+*
+!scanner/
+!scanner/package.json
+!scanner/package-lock.json
+!scanner/src/
+!scanner/src/**
+!src/
+!src/lib/
+!src/lib/ingest/
+!src/lib/ingest/extract.js

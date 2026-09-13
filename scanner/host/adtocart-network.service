@@ -1,0 +1,14 @@
+[Unit]
+Description=AdtoCart scanner network restrictions
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+Before=adtocart-scanner.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /opt/adtocart/network.sh
+
+[Install]
+WantedBy=docker.service

@@ -127,4 +127,4 @@ Authorized live email test on 13 September 2026: Supabase accepted the signup em
 
 The test recipient completed confirmation: a read-only Auth check verified email_confirmed_at and last_sign_in_at for david@adtocart.cc. The signup-email gate is now verified through SMTP delivery and account confirmation.
 
-Scanner server preparation is in [SCANNER_HOSTING.md](SCANNER_HOSTING.md). Linux/headless configuration, a non-root container recipe, bounded tick requests and graceful worker shutdown are implemented. Hosting selection, container build and real browser validation remain pending.
+Scanner server preparation is in [SCANNER_HOSTING.md](SCANNER_HOSTING.md). Linux/headless configuration, a non-root container recipe, bounded tick requests and graceful worker shutdown are implemented. The owner selected the existing Contabo VPS. Docker and the complete scanner image are prepared; Chromium reports active namespace and Seccomp-BPF sandboxing. Store scanning, queued pipeline and recovery checks are tracked in the hosting document. No production worker is activated.

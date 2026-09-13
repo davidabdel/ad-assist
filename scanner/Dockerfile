@@ -1,11 +1,13 @@
 # Build from the scanner directory. Contains no deployment credentials.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends chromium ca-certificates tini \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium chromium-sandbox ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY scanner/package.json scanner/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY src ./src
+COPY scanner/src ./scanner/src
+COPY src/lib/ingest/extract.js ./src/lib/ingest/extract.js
+WORKDIR /app/scanner
 ENV NODE_ENV=production \
     CHROME_PATH=/usr/bin/chromium \
     SCANNER_HEADLESS=true \
