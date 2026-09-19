@@ -159,3 +159,20 @@ Staged app deployment on 13 September 2026: `dpl_8hybF2Loz9Lme1kcg9h2UrrVRthp`, 
 Production ADMIN_PASSWORD_HASH, ADMIN_SESSION_SECRET, FREE_SCAN_SECRET and CRON_SECRET are configured as sensitive environment variables. The generated owner password is stored only in ignored `.scratch/owner-login.txt` with mode 0600. Staged checks passed: admin/pricing/billing pages 200; unauthenticated admin metrics and billing APIs 401; both owner campaign pages 200; admin password login, authenticated metrics and logout. The scripted admin request uses the configured canonical origin; this is not a browser-origin test from the staging hostname.
 
 Live Stripe settings are not configured and the public domain has not been promoted. Automatic approval review blocked the Create restricted key action pending explicit approval for its permissions and recipient. Proposed recipient: AdtoCart's Vercel server, with the key handled privately during setup. Proposed write access: customers, Checkout Sessions, products/prices, billing portal and webhook endpoints. Proposed read access: account details, subscriptions, invoices/invoice payments, charges and refunds. No payout, bank-account management or refund-creation access is needed. Await approval before creating the credential.
+
+## Live billing progress — 19 September 2026
+
+The owner approved the restricted Stripe credential scope and created `AdtoCart Vercel billing`. Its value is saved as production Secret `STRIPE_SECRET_KEY`. The owner explicitly approved all four live USD prices. Product detail pages verified the following existing catalog, and the four corresponding production environment variables were saved and listed successfully:
+
+| Plan | Product | Price | USD |
+| --- | --- | --- | --- |
+| Starter | prod_VFkuFH3x979F2Z | price_1UFFOXGkDjIcIDlQIY397T3Z | 149 monthly |
+| Growth | prod_VFpBhUu52UuLfT | price_1UFJXIGkDjIcIDlQaccBzCkK | 499 monthly |
+| Agency | prod_VFpCZ9iB7PieYb | price_1UFJXgGkDjIcIDlQeQ8eGwPk | 1499 monthly |
+| 10 Video Credits | prod_VFpCLo6nkn8PxK | price_1UFJY6GkDjIcIDlQgdiBvPmR | 59 once |
+
+Environment names are `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_GROWTH`, `STRIPE_PRICE_AGENCY`, and `STRIPE_PRICE_VIDEO`. These changes require a new deployment; the prior staged build does not include them.
+
+Dedicated live portal and webhook remain pending. Stripe's portal dashboard controls the shared default configuration, which must not be changed for UnrealAdz. The webhook creation UI offers Clover/current/latest versions rather than the app's pinned `2025-04-30.basil`; no destination was created. The sole existing live destination belongs to UnrealAdz and was left unchanged.
+
+`scripts/stripe-live-portal-setup.mjs` is prepared, syntax checked, and NOT executed. It requires the approved restricted live key in private ignored `.scratch/stripe-live-key`; checks the exact account and all four existing price amounts/currencies/recurrences; creates only an isolated AdtoCart portal if absent; and refuses a default portal or unexpected configuration. It does not create catalog entries, charge customers, or run AI. The runtime credential stored in Vercel cannot be downloaded. Awaiting whether the owner retained the key before arranging secure local entry. No new credential or permission expansion is authorized by this note.
