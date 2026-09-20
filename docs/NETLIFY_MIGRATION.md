@@ -22,3 +22,13 @@ Sources checked 20 September 2026:
 - https://www.netlify.com/pricing/
 
 Current status: login tab opened; owner login pending. Configuration is prepared only. No Netlify project, secret transfer, deployment or DNS change has been completed.
+
+## Progress — 21 September 2026
+
+Authenticated CLI access found the existing UConnect team (`david-gmao3jq`), verified Free with 300 monthly credits and automatic top-ups disabled. Created linked project `adtocart-480` (`5859c01b-d0c3-4e45-9165-580c6f7eae81`); the plain adtocart name was unavailable. Existing team projects are unchanged.
+
+Owner explicitly approved transferring the existing runtime secrets into Netlify after automatic approval review requested destination-specific permission. Import succeeded without exposing values. The first draft preview served pricing (200) and denied unauthenticated admin metrics (401). No production publish or DNS switch has occurred.
+
+Added service-only `background_jobs` migration 0028 after all migrations passed isolated PostgreSQL tests. The migration applied successfully to hosted Supabase. Existing campaigns and billing records were not modified. Job payloads contain operation paths/bodies, never user tokens. Unique active fingerprints and conditional claims prevent simultaneous duplicate execution. Results are owner-scoped through an authenticated API. Slow campaign routes dispatch to a Netlify background function; the client waits for the persisted result. Stale attempts require explicit review/retry rather than automatic repetition of potentially paid actions.
+
+The first disposable-account runtime test found the NETLIFY build flag absent from the deployed runtime: it returned the route's normal 404 instead of dispatching. Replaced the detection with explicit `ADTOCART_BACKGROUND_MODE=netlify` and `ADTOCART_NETLIFY_ORIGIN`; these were saved to the project. Updated preview deployment and repeated runtime verification are pending. The disposable test account and its associated records were removed. No AI generation or payment ran.

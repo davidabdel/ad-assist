@@ -1,3 +1,4 @@
+import { dispatchBackground } from '@/lib/background-jobs';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { makeAllPictures, pollCampaignAssets } from '@/lib/pipeline/assets';
 
@@ -30,6 +31,8 @@ export async function POST(
     const { id } = await params;
     const owner = await requireOwner(req);
     await requireCampaignOwner(owner, id);
+    const queued = await dispatchBackground(req, owner.id);
+    if (queued) return queued;
 
     // One deliberate exception to "this route only tidies up": drawing every
     // missing picture at once. It spends — four credits a row — so it is a

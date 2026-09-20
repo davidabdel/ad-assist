@@ -1,3 +1,4 @@
+import { dispatchBackground } from '@/lib/background-jobs';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { advance } from '@/lib/pipeline/advance';
 
@@ -21,6 +22,8 @@ export async function POST(
     const { id } = await params;
     const owner = await requireOwner(req);
     const campaign = await requireCampaignOwner(owner, id);
+    const queued = await dispatchBackground(req, owner.id);
+    if (queued) return queued;
     const result = await advance(campaign);
     return Response.json(result);
   } catch (e) {

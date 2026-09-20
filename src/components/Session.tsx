@@ -155,6 +155,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     });
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error(readError(body, res.status));
+    if (res.status === 202 && typeof body?.jobId === 'string') {
+      const deadline = Date.now() + 16 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const current = await browserClient().auth.getSession();
+        const pending = await fetch(`/api/background-jobs/${encodeURIComponent(body.jobId)}`, {
+          headers: { Authorization: `Bearer ${current.data.session?.access_token ?? ''}` },
+        });
+        const job = await pending.json();
+        if (!pending.ok) throw new Error(readError(job, pending.status));
+        if (job.state === 'failed') throw new Error(readError(job.result, job.http_status));
+        if (job.state === 'completed') return job.result as T;
+      }
+      throw new Error('This operation is taking longer than expected. Check the campaign before retrying.');
+    }
     return body as T;
   }, []);
 

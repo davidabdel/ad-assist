@@ -1,3 +1,4 @@
+import { dispatchBackground } from '@/lib/background-jobs';
 import { usageContext } from '@/lib/usage';
 import { z } from 'zod';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
@@ -286,6 +287,8 @@ export async function POST(
     const { id, ideaId } = await params;
     const owner = await requireOwner(req);
     await requireCampaignOwner(owner, id);
+    const queued = await dispatchBackground(req, owner.id);
+    if (queued) return queued;
     const idea = await loadIdea(id, ideaId);
 
     const parsed = ActionSchema.safeParse(await req.json().catch(() => ({})));

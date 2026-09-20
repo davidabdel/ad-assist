@@ -77,8 +77,19 @@ assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get
 await db.query('update campaigns set archived_at=null where id=$1',[paid]);
 await db.query('delete from campaign_publishing_grants where campaign_id=$1',[paid]);
 assert.equal((await db.query("select get_public_page('paid',null)")).rows[0].get_public_page,null);
+// Only one active background attempt may exist for the same owner/action.
+const attempts=await Promise.allSettled([1,2].map(()=>db.query("insert into background_jobs(user_id,fingerprint,path) values($1,'same-action','/api/campaigns/example/advance') returning id",[uid])));
+assert.equal(attempts.filter(x=>x.status==='fulfilled').length,1);
+assert.equal(attempts.filter(x=>x.status==='rejected').length,1);
+const job=attempts.find(x=>x.status==='fulfilled').value.rows[0].id;
+const claims=await Promise.all([1,2].map(()=>db.query("update background_jobs set state='running' where id=$1 and state='queued' returning id",[job])));
+assert.equal(claims.reduce((n,x)=>n+x.rows.length,0),1);
+await db.query("update background_jobs set state='completed',http_status=200,result='{}' where id=$1",[job]);
+await db.query("insert into background_jobs(user_id,fingerprint,path) values($1,'same-action','/api/campaigns/example/advance')",[uid]);
+console.log('PASS background operation deduplication, atomic claim, and explicit subsequent operation');
 await db.exec('set role anon');
 await assert.rejects(db.query('select * from billing_accounts'),/permission denied/);
+await assert.rejects(db.query('select * from background_jobs'),/permission denied/);
 await assert.rejects(db.query('select * from campaign_publishing_grants'),/permission denied/);
 await assert.rejects(db.query('select admin_metrics()'),/permission denied/);
 await db.exec('reset role');
