@@ -50,3 +50,6 @@ scanner/node_modules/
 
 # Screenshots written by scripts/shoot-status-strip.mjs. Evidence, not source.
 /.shots/
+
+# Netlify local deployment state
+/.netlify/
