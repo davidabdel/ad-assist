@@ -15,8 +15,9 @@ export async function POST(req: Request) {
     if (lookupError) throw lookupError;
     if (already) return Response.json({ received: true });
     if (event.type.startsWith('customer.subscription.')) {
-      const { data: account, error } = await db.from('billing_accounts').select('user_id').eq('customer_id', obj.customer).single();
+      const { data: account, error } = await db.from('billing_accounts').select('user_id').eq('customer_id', obj.customer).maybeSingle();
       if (error) throw error;
+      if (!account) return Response.json({ received: true });
       const { data: lock, error: lockError } = await db.rpc('claim_billing_sync',{p_user:account.user_id});
       if(lockError||!lock)throw new Error('Subscription sync is busy; retry');
       try {
@@ -37,10 +38,12 @@ export async function POST(req: Request) {
       if (applyError) throw applyError;
     } else if (['refund.created','refund.updated','refund.failed'].includes(event.type)) {
       const refund = await stripe<{id:string;charge:string;payment_intent:string;amount:number;currency:string;status:string;created:number}>(`refunds/${encodeURIComponent(obj.id)}`);
-      if(refund.currency!=='usd' || !refund.charge) throw new Error('Unsupported refund');
+      if(!refund.charge) throw new Error('Unsupported refund');
       const charge = await stripe<{customer:string}>(`charges/${encodeURIComponent(refund.charge)}`);
-      const {data:account,error}=await db.from('billing_accounts').select('user_id').eq('customer_id',charge.customer).single();
+      const {data:account,error}=await db.from('billing_accounts').select('user_id').eq('customer_id',charge.customer).maybeSingle();
       if(error)throw error;
+      if(!account)return Response.json({received:true});
+      if(refund.currency!=='usd')throw new Error('Unsupported refund');
       // Locate the original purchase even when a refund event arrives first.
       const sessions=await stripe<{data:{id:string;metadata:Record<string,string>}[]}>(`checkout/sessions?payment_intent=${encodeURIComponent(refund.payment_intent)}&limit=100`);
       const pack=sessions.data.find(s=>s.metadata?.kind==='video_pack');
@@ -56,9 +59,10 @@ export async function POST(req: Request) {
       if(applyError)throw applyError;
     } else if (event.type === 'invoice.paid') {
       const invoice = await stripe<{ id: string; customer: string; currency: string; amount_paid: number; status: string; status_transitions: { paid_at: number } }>(`invoices/${encodeURIComponent(obj.id)}`);
-      if (invoice.status !== 'paid' || invoice.currency !== 'usd') throw new Error('Unsupported invoice');
-      const { data: account, error } = await db.from('billing_accounts').select('user_id').eq('customer_id', invoice.customer).single();
+      const { data: account, error } = await db.from('billing_accounts').select('user_id').eq('customer_id', invoice.customer).maybeSingle();
       if (error) throw error;
+      if (!account) return Response.json({ received: true });
+      if (invoice.status !== 'paid' || invoice.currency !== 'usd') throw new Error('Unsupported invoice');
       const { error: writeError } = await db.from('billing_payments').upsert({ provider_id: invoice.id, user_id: account.user_id, kind: 'subscription', amount_usd: invoice.amount_paid / 100, paid_at: new Date(invoice.status_transitions.paid_at * 1000).toISOString() }, { onConflict: 'provider_id', ignoreDuplicates: true });
       if (writeError) throw writeError;
       const { error: eventError } = await db.from('billing_events').insert({ id: event.id, user_id: account.user_id, kind: event.type, provider_created: event.created });
