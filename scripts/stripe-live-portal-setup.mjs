@@ -38,7 +38,7 @@ const matches = [];
 let after;
 do {
   const page = await stripe(`billing_portal/configurations?limit=100${after ? `&starting_after=${after}` : ''}`);
-  matches.push(...page.data.filter(p => p.metadata?.app === 'adtocart'));
+  matches.push(...page.data.filter(p => p.metadata?.app === 'adtocart' && !p.is_default && p.active));
   after = page.has_more ? page.data.at(-1).id : undefined;
 } while (after);
 assert.ok(matches.length <= 1, 'Multiple AdtoCart portals found; review before changing');
@@ -59,8 +59,9 @@ if (!portal) {
     fields[`features[subscription_update][products][${index}][product]`] = catalog[plan][0];
     fields[`features[subscription_update][products][${index}][prices][0]`] = catalog[plan][1];
   }
-  portal = await stripe('billing_portal/configurations', fields, 'adtocart-live-portal-v1');
+  portal = await stripe('billing_portal/configurations', fields, 'adtocart-live-isolated-portal-v2');
 }
+portal = await stripe(`billing_portal/configurations/${portal.id}?expand[]=features.subscription_update.products`);
 assert.equal(portal.livemode, true);
 assert.equal(portal.is_default, false, 'Do not use the shared default portal');
 assert.equal(portal.active, true);
@@ -71,6 +72,7 @@ const actualProducts = portal.features.subscription_update.products.map(p => [p.
 const expectedProducts = ['starter', 'growth', 'agency'].map(p => [catalog[p][0], [catalog[p][1]]]).sort();
 assert.deepEqual(actualProducts, expectedProducts);
 for (const feature of ['payment_method_update', 'invoice_history', 'subscription_cancel', 'subscription_update']) assert.equal(portal.features[feature].enabled, true);
+// Initial default portal cleanup requires separate owner approval; do not mutate it here.
 mkdirSync('.scratch/release', { recursive: true, mode: 0o700 });
 writeFileSync('.scratch/release/live-portal.json', JSON.stringify({ STRIPE_PORTAL_CONFIGURATION: portal.id, charges_enabled: account.charges_enabled, payouts_enabled: account.payouts_enabled }, null, 2), { mode: 0o600 });
 console.log('Verified dedicated AdtoCart live portal. Configuration saved privately; no payment or generation performed.');
