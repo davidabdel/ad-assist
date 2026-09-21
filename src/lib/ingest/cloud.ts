@@ -1,12 +1,7 @@
 import { publicFetch } from './public-fetch';
-// linkedom, not jsdom, and the reason is production-only: Next treats jsdom as an
-// external package, so the serverless function `require()`s it — and jsdom now
-// pulls in an ESM-only encoding sniffer, which cannot be required. The build is
-// clean and the route 500s with "Failed to load external module jsdom". linkedom
-// gets bundled instead, so no require() of ESM happens, and it gives Readability
-// and the selectors below the same DOM surface. The Mac worker keeps jsdom: it
-// runs on plain Node, where none of this applies.
-import { parseHTML } from 'linkedom';
+// Use linkedom's ESM entry point via dynamic import below. Netlify's function
+// packager converts static imports to require(), which selects a CommonJS
+// entry point incompatible with linkedom's ESM-only selector dependency.
 import {
   dedupeReviews,
   extractAmazon,
@@ -154,6 +149,8 @@ export async function ingestProductFromServer(url: string): Promise<CloudIngestR
     };
   }
 
+  // Preserve the ESM entry point when Netlify transpiles this module to CommonJS.
+  const { parseHTML } = await import('linkedom');
   const { document } = parseHTML(html);
 
   const shopify = await fetchShopifyProduct(url) ?? extractAmazon(document, url);

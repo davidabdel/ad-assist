@@ -21,14 +21,25 @@ Sources checked 20 September 2026:
 - https://docs.netlify.com/build/functions/scheduled-functions/
 - https://www.netlify.com/pricing/
 
-Current status: login tab opened; owner login pending. Configuration is prepared only. No Netlify project, secret transfer, deployment or DNS change has been completed.
+Current status: Netlify project, credential transfer and subdomain deployment are complete. Background runtime checks pass. Browser scanner hosting, remaining launch checks and canonical domain cutover are outstanding. No DNS change has been made.
 
 ## Progress — 21 September 2026
 
 Authenticated CLI access found the existing UConnect team (`david-gmao3jq`), verified Free with 300 monthly credits and automatic top-ups disabled. Created linked project `adtocart-480` (`5859c01b-d0c3-4e45-9165-580c6f7eae81`); the plain adtocart name was unavailable. Existing team projects are unchanged.
 
-Owner explicitly approved transferring the existing runtime secrets into Netlify after automatic approval review requested destination-specific permission. Import succeeded without exposing values. The first draft preview served pricing (200) and denied unauthenticated admin metrics (401). No production publish or DNS switch has occurred.
+Owner explicitly approved transferring the existing runtime secrets into Netlify after automatic approval review requested destination-specific permission. Import succeeded without exposing values. The first draft preview served pricing (200) and denied unauthenticated admin metrics (401). The Netlify subdomain was subsequently published for runtime checks; the customer domain still points to the existing Vercel release.
 
 Added service-only `background_jobs` migration 0028 after all migrations passed isolated PostgreSQL tests. The migration applied successfully to hosted Supabase. Existing campaigns and billing records were not modified. Job payloads contain operation paths/bodies, never user tokens. Unique active fingerprints and conditional claims prevent simultaneous duplicate execution. Results are owner-scoped through an authenticated API. Slow campaign routes dispatch to a Netlify background function; the client waits for the persisted result. Stale attempts require explicit review/retry rather than automatic repetition of potentially paid actions.
 
 The first disposable-account runtime test found the NETLIFY build flag absent from the deployed runtime: it returned the route's normal 404 instead of dispatching. Replaced the detection with explicit `ADTOCART_BACKGROUND_MODE=netlify` and `ADTOCART_NETLIFY_ORIGIN`; these were saved to the project. Updated preview deployment and repeated runtime verification are pending. The disposable test account and its associated records were removed. No AI generation or payment ran.
+
+
+### Verified background runtime
+
+Netlify's version-2 function packager forces NFT, so `node_bundler = "esbuild"` did not change the emitted worker. Its CommonJS conversion selected linkedom's CommonJS entry point, which cannot require the ESM-only css-select dependency. Changed both parser consumers to dynamic ESM imports and removed the ineffective bundler override. The actual packaged worker now imports successfully, rejects unauthenticated requests, and loads the HTML parser; `node scripts/netlify-package-check.mjs` repeats this offline regression check after a Netlify build.
+
+Type checking and Netlify build passed. A disposable live auth account verified authenticated dispatch, a harmless missing-idea 404 persisted by the background worker, successful empty-campaign media polling (200), authenticated status polling and anonymous rejection (401). Account and cascading records were removed. No AI generation, provider task, email, or payment was performed. This does not replace the skipped paid end-to-end test or validate browser scanning.
+
+Cloudflare login is pending for the eventual domain cutover. DNS and the disabled canonical Stripe webhook remain unchanged. Browser scanning and unattended pipeline processing still need a supported deployment; the rejected VPS has not been activated.
+
+Verified Netlify deployment: `6ab090e1a66ab6d9abad150d` (https://6ab090e1a66ab6d9abad150d--adtocart-480.netlify.app).

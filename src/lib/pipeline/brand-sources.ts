@@ -1,5 +1,3 @@
-import { parseHTML } from 'linkedom';
-
 /**
  * Reading a brand off its own website — the evidence half.
  *
@@ -22,7 +20,8 @@ import { parseHTML } from 'linkedom';
  * linkedom rather than jsdom for the same production-only reason as the ingest:
  * Next treats jsdom as an external package, so the serverless function
  * `require()`s it, and jsdom now pulls in an ESM-only encoding sniffer that
- * cannot be required. See the note at the top of ingest/cloud.ts.
+ * cannot be required. Load linkedom dynamically to preserve its ESM entry point
+ * under Netlify too. See the note at the top of ingest/cloud.ts.
  */
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
@@ -294,6 +293,8 @@ export async function collectBrandEvidence(pageUrl: string): Promise<BrandEviden
   const html = await text(pageUrl, PAGE_HEADERS, 20_000, 3 * 1024 * 1024);
   if (!html) throw new Error(`the page could not be fetched for branding (${pageUrl})`);
 
+  // Preserve the ESM entry point when Netlify transpiles this module to CommonJS.
+  const { parseHTML } = await import('linkedom');
   const { document } = parseHTML(html);
   const abs = (href: string | null | undefined): string | null => {
     if (!href) return null;
