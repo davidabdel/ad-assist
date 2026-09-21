@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { checkPassword, signAdmin, ADMIN_COOKIE, ADMIN_TTL } from '@/lib/admin-session';
 import { sameOrigin } from '@/lib/billing/stripe';
 import { serviceClient } from '@/lib/supabase';
+import { trustedClientAddress } from '@/lib/client-address';
 export const runtime = 'nodejs';
 export async function POST(req: Request) {
   const secret = process.env.ADMIN_SESSION_SECRET ?? '';
@@ -10,7 +11,7 @@ export async function POST(req: Request) {
   if (secret.length < 32 || !hash) return Response.json({ error: 'Admin access has not been configured.' }, { status: 503 });
   try {
     sameOrigin(req);
-    const ip = process.env.VERCEL ? req.headers.get('x-vercel-forwarded-for') : process.env.NODE_ENV !== 'production' ? 'local' : null;
+    const ip = trustedClientAddress(req);
     if (!ip) return Response.json({ error: 'Trusted login gateway unavailable.' }, { status: 503 });
     const key = createHmac('sha256', secret).update(ip).digest('hex');
     const { data: allowed, error } = await serviceClient().rpc('admin_login_attempt', { p_key: key });

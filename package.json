@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
+    "@netlify/functions": "^6.0.0",
     "@supabase/ssr": "^0.12.6",
     "@supabase/supabase-js": "^2.115.0",
     "clsx": "^2.1.1",

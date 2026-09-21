@@ -40,6 +40,21 @@ Netlify's version-2 function packager forces NFT, so `node_bundler = "esbuild"` 
 
 Type checking and Netlify build passed. A disposable live auth account verified authenticated dispatch, a harmless missing-idea 404 persisted by the background worker, successful empty-campaign media polling (200), authenticated status polling and anonymous rejection (401). Account and cascading records were removed. No AI generation, provider task, email, or payment was performed. This does not replace the skipped paid end-to-end test or validate browser scanning.
 
-Cloudflare login is pending for the eventual domain cutover. DNS and the disabled canonical Stripe webhook remain unchanged. Browser scanning and unattended pipeline processing still need a supported deployment; the rejected VPS has not been activated.
+Cloudflare login is complete for the eventual domain cutover. DNS and the disabled canonical Stripe webhook remain unchanged. Browser scanning and unattended pipeline processing still need a supported deployment; the rejected VPS has not been activated.
 
 Verified Netlify deployment: `6ab090e1a66ab6d9abad150d` (https://6ab090e1a66ab6d9abad150d--adtocart-480.netlify.app).
+
+
+### Domain preparation and remaining scanner decision
+
+Owner signed into Cloudflare on 21 September. Verified zone `0b7f41f4a5daceac8831a0e2b7d12605` in account `d4d08355f5a6cdca4ac2128790daeb28`. Both `@` and `www` are DNS-only CNAME records targeting `51354bfe89f7d239.vercel-dns-017.com`, TTL Auto. These are the exact rollback targets; the apex A records seen by DNS resolvers are flattened results, not editable A records. Six ImprovMX mail/verification records were inspected and remain untouched.
+
+Added `adtocart.cc` to Netlify, which also adds `www.adtocart.cc`. DNS has NOT switched. Netlify initially selected the apex as primary; changing to `www` was temporarily refused while certificate provisioning was in progress. Set `www` as primary before cutover, matching existing application/auth/Stripe URLs. Netlify's domain panel specifies `www CNAME adtocart-480.netlify.app`; use the documented `apex-loadbalancer.netlify.com` flattened CNAME for the apex. Certificate validation remains pending until DNS points to Netlify. Do not remove the Vercel rollback deployment.
+
+The browser scanner is still unresolved. Asked the owner to choose adapting it to Netlify versus running the existing worker on an always-awake Mac. No existing VPS activation is authorized by this question. Customer-facing launch must not claim scanning works until the selected runtime is implemented and verified.
+
+### Admin and free-scan host compatibility
+
+A live Netlify admin sign-in check returned 503 because the login route only accepted Vercel's gateway. Free-scan rate limiting also used one development bucket for all non-Vercel users. Both now use a shared trusted-address helper: Netlify's official `getContext().ip`, Vercel's dedicated header only on Vercel, and a development bucket only in explicit development/test mode. Unknown production gateways fail closed; caller-provided forwarding headers cannot select a Netlify rate-limit bucket. Added the official `@netlify/functions` runtime dependency. Offline context/spoofing checks and type checking passed; the draft preview passed admin login, authenticated metrics, logout, anonymous metrics rejection, and private-address scan rejection. The fix is not yet published to the main Netlify subdomain.
+
+The owner said continue after the scanner choice was presented. Proceeding with Netlify adaptation; do not activate the VPS or require the Mac.

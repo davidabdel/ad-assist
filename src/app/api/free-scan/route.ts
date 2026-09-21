@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { ingestProductFromServer } from '@/lib/ingest/cloud';
 import { publicUrl } from '@/lib/ingest/public-fetch';
 import { serviceClient } from '@/lib/supabase';
+import { trustedClientAddress } from '@/lib/client-address';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -22,8 +23,7 @@ export async function POST(req: Request) {
   } catch {
     return Response.json({ error: 'Enter a public product page address.' }, { status: 400 });
   }
-  // Vercel overwrites this header. Do not trust a caller-supplied generic XFF.
-  const ip = process.env.VERCEL ? req.headers.get('x-vercel-forwarded-for') : 'local-development';
+  const ip = trustedClientAddress(req);
   if (!ip) return Response.json({ error: 'The scan service is temporarily unavailable.' }, { status: 503 });
   try {
     const key = createHmac('sha256', secret).update(ip).digest('hex');
