@@ -11,7 +11,6 @@
 // scrolled and read with innerText, which is how the widgets that render after
 // JavaScript get harvested at all. That is the whole reason the Mac path exists.
 
-import { JSDOM } from 'jsdom';
 import {
   dedupeReviews,
   extractAmazon,
@@ -24,7 +23,7 @@ import {
   REVIEW_WIDGETS,
   shopifyEndpointFor,
 } from '../../src/lib/ingest/extract.js';
-import { getBrowser, newPage, scrollThrough, sleep } from './browser.js';
+import { getBrowser, newPage, scrollThrough, sleep, releaseBrowser, browserHost } from './browser.js';
 
 /**
  * Shopify hands over a clean product object if you just ask for it. Fetched from
@@ -136,6 +135,7 @@ export async function ingestProduct(url, { keepOpen = false } = {}) {
     // One parse of the rendered DOM, shared by the readers that do not need a live
     // page. This is the same document shape the server path builds, which is what
     // keeps the two routes producing identical output from identical HTML.
+    const { JSDOM } = await import('jsdom');
     const dom = new JSDOM(await page.content(), { url: page.url() });
     const { document } = dom.window;
 
@@ -168,7 +168,7 @@ export async function ingestProduct(url, { keepOpen = false } = {}) {
       final_url: page.url(),
       http_status: httpStatus,
       fetched_at: new Date().toISOString(),
-      ingest_route: 'mac',
+      ingest_route: browserHost(),
       structured,
       structured_source: structured?.source ?? null,
       page_title: readable.title,
@@ -179,6 +179,6 @@ export async function ingestProduct(url, { keepOpen = false } = {}) {
     };
   } finally {
     if (!keepOpen) await page.close().catch(() => {});
-    browser.disconnect();
+    await releaseBrowser(browser);
   }
 }

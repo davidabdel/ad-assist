@@ -5,6 +5,7 @@ import { serviceClient } from '../../src/lib/supabase';
 import { POST as advance } from '../../src/app/api/campaigns/[id]/advance/route';
 import { POST as assets } from '../../src/app/api/campaigns/[id]/assets/route';
 import { POST as idea } from '../../src/app/api/campaigns/[id]/ideas/[ideaId]/route';
+import { canContinue, continueCampaign } from '../../src/lib/scanner/continuation';
 
 export default async function handler(req:Request) {
  const expected=process.env.CRON_SECRET;const offered=req.headers.get('authorization')?.replace(/^Bearer /,'');
@@ -31,6 +32,9 @@ export default async function handler(req:Request) {
  }catch{result={error:'Background work failed. Review the campaign before retrying.'};}
  const saved=await db.from('background_jobs').update({state:status<400?'completed':'failed',http_status:status,result,finished_at:new Date().toISOString()}).eq('id',id);
  if(saved.error)throw saved.error;
+ if(matched[2]==='advance' && status===200 && canContinue(result)) {
+  await continueCampaign(matched[1],owner.id,authorization);
+ }
 }
 // The suffix also declares background mode for CLI versions predating config.background.
 export const config={background:true};

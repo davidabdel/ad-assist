@@ -15,7 +15,7 @@
 // runs server-side, and IT is what the copywriting prompt sees. Raw ad text must
 // never reach a prompt that writes David's headlines.
 
-import { getBrowser, newPage, sleep } from './browser.js';
+import { getBrowser, newPage, sleep, releaseBrowser } from './browser.js';
 
 const BASE = 'https://www.facebook.com/ads/library/';
 
@@ -327,6 +327,6 @@ export async function scanAdLibrary({
     };
   } finally {
     await page.close().catch(() => {});
-    browser.disconnect();
+    await releaseBrowser(browser);
   }
 }

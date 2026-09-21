@@ -8,7 +8,14 @@
 //     and look exactly like "not running". We probe /json/version, not the process
 //     list, and we always create our own page rather than reusing whatever is open.
 
-import puppeteer from 'puppeteer-core';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const hostedBrowser = new AsyncLocalStorage();
+export const browserHost = () => hostedBrowser.getStore() ? 'netlify' : 'mac';
+export const withHostedBrowser = (browser, work) => hostedBrowser.run(browser, work);
+export async function releaseBrowser(browser) {
+  if (hostedBrowser.getStore() !== browser) browser.disconnect();
+}
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +56,8 @@ let launching = null;
 
 /** Connect to our Chrome, starting it if it isn't already up. */
 export async function getBrowser({ headless = process.env.SCANNER_HEADLESS === 'true' } = {}) {
+  if (hostedBrowser.getStore()) return hostedBrowser.getStore();
+  const { default: puppeteer } = await import('puppeteer-core');
   if (!(await portAlive(PORT))) {
     if (launching) await launching.catch(() => {});
     else {

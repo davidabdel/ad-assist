@@ -75,7 +75,7 @@ export type IngestPayload = {
   final_url: string;
   http_status: number | null;
   fetched_at: string;
-  ingest_route: 'server' | 'mac';
+  ingest_route: 'server' | 'mac' | 'netlify';
   structured: Record<string, unknown> | null;
   structured_source: string | null;
   page_title: string | null;

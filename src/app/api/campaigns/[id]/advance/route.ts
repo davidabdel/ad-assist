@@ -1,6 +1,7 @@
 import { dispatchBackground } from '@/lib/background-jobs';
 import { AuthError, requireCampaignOwner, requireOwner } from '@/lib/auth';
 import { advance } from '@/lib/pipeline/advance';
+import { dispatchScannerJobs } from '@/lib/scanner/dispatch';
 
 export const dynamic = 'force-dynamic';
 /**
@@ -22,9 +23,11 @@ export async function POST(
     const { id } = await params;
     const owner = await requireOwner(req);
     const campaign = await requireCampaignOwner(owner, id);
+    if (campaign.archived_at) return Response.json({ error: 'This campaign is archived.' }, { status: 409 });
     const queued = await dispatchBackground(req, owner.id);
     if (queued) return queued;
     const result = await advance(campaign);
+    await dispatchScannerJobs(id, req.headers.get('authorization'));
     return Response.json(result);
   } catch (e) {
     if (e instanceof AuthError) return Response.json({ error: e.message }, { status: e.status });

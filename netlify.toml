@@ -8,3 +8,9 @@
 
 # Netlify automatically provisions its maintained Next.js adapter.
 # Keep secrets in the site's environment settings, never in this file.
+
+[functions."scanner-health"]
+  included_files = ["node_modules/@sparticuz/chromium/bin/**"]
+
+[functions."scanner-background"]
+  included_files = ["node_modules/@sparticuz/chromium/bin/**"]

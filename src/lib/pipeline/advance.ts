@@ -358,7 +358,7 @@ async function unit(
         await db.from('campaigns').update({ status: 'scraping' }).eq('id', campaign.id);
         return {
           status: 'scraping', done: false, waiting: true, terminal: false,
-          did: 'This page is already with the Mac worker. Waiting on it.',
+          did: 'This page is already queued for the browser scanner.',
         };
       }
 
@@ -396,7 +396,7 @@ async function unit(
         campaign_id: campaign.id,
         kind: 'ingest',
         target_url: campaign.source_url,
-        notes: `server read failed, handed to the Mac: ${reason}`,
+        notes: `server read failed, handed to the browser scanner: ${reason}`,
       });
       if (error) return fail(campaign.id, `Could not queue the scrape: ${error.message}`);
 
@@ -405,7 +405,7 @@ async function unit(
         status: 'scraping', done: false, waiting: true, terminal: false,
         notes: [reason],
         did: 'This store will not be read by a plain request, so it has been handed to '
-          + 'Chrome on the Mac. The Mac has to be awake for this one.',
+          + 'the browser scanner. The scan will continue in the background.',
       };
     }
 
@@ -421,7 +421,7 @@ async function unit(
         if (job.status === 'queued' || job.status === 'running') {
           return {
             status: 'scraping', done: false, waiting: true, terminal: false,
-            did: `Scrape is ${job.status}. Waiting on the Mac-side worker.`,
+            did: `Scrape is ${job.status}. Waiting on the browser scanner.`,
           };
         }
         if (job.status === 'failed') {
@@ -894,7 +894,7 @@ async function unit(
         await db.from('campaigns').update({ status: 'scanning' }).eq('id', campaign.id);
         return {
           status: 'scanning', done: false, waiting: true, terminal: false,
-          did: `The ad-library scan is already queued (${existing.length} searches). Waiting on the Mac.`,
+          did: `The ad-library scan is already queued (${existing.length} searches). Waiting on the browser scanner.`,
         };
       }
 
@@ -915,12 +915,12 @@ async function unit(
       return {
         status: 'scanning', done: false, waiting: true, terminal: false,
         did: `Queued ${plan.length} ad-library searches across ${regions}, statics and video. `
-          + `About ${estimatedScanMinutes(plan.length)} minutes of Chrome on your Mac, and it `
-          + 'costs nothing.',
+          + `About ${estimatedScanMinutes(plan.length)} minutes of browser scanning. `
+          + 'No AI generation is started by this scan.',
         notes: [
           'The searches are ad-copy phrases, not your product category — the point is to '
           + 'see how winning ads are BUILT, and that travels between categories.',
-          'Your Mac has to be awake and the worker running for this stage.',
+          'Progress updates as each search finishes.',
         ],
       };
     }
@@ -951,7 +951,7 @@ async function unit(
           status: 'scanning', done: false, waiting: true, terminal: false,
           did: `${completed.length} of ${jobs.length} searches done`
             + (found ? `, ${found} ads so far` : '')
-            + '. Waiting on Chrome on your Mac.',
+            + '. Waiting on the remaining browser scans.',
           notes: failed.length
             ? [`${failed.length} search(es) failed and will not be retried: `
               + failed.map((j) => j.error_message).filter(Boolean).join(' · ')]
@@ -966,8 +966,7 @@ async function unit(
       if (!completed.length) {
         return fail(campaign.id, 'Every ad-library search failed. '
           + (failed[0]?.error_message ?? 'No reason was recorded.')
-          + ' The most common cause is that Chrome on the Mac has no signed-in '
-          + 'Facebook session yet.');
+          + ' The library may be temporarily unavailable or require a login. Please retry later.');
       }
 
       const qualified = completed.reduce((n, j) => n + (j.items_qualified ?? 0), 0);
