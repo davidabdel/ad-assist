@@ -71,3 +71,11 @@ Added event-driven campaign continuation: successful advance results continue un
 `ADTOCART_SCANNER_MODE=netlify`, `ADTOCART_AUTORUN_MODE=netlify`, and canonical `NEXT_PUBLIC_SITE_URL=https://www.adtocart.cc` are configured. The fixed background destination remains `https://adtocart-480.netlify.app`. These settings require the final candidate deployment. DNS is still unchanged pending that deployment and checks. The final build was initially blocked by an approval-review usage limit; the authorized retry on 22 September succeeded.
 
 Before any repeat live scanner test with autorun enabled, seed its disposable campaign in a terminal `failed` state so follow-up advance cannot invoke AI. The older check script must not be run unchanged now that autorun is enabled.
+
+### Final production runtime check
+
+Deployment `6ab1899169caf485e6064ba6` passed admin sign-in/metrics/logout, anonymous rejection, background dispatch/results and signed webhook transport (invalid signature 400, signed unrelated customer 200). Supabase's canonical URL and ImprovMX settings match `https://www.adtocart.cc`. This was a synthetic webhook check, not an actual Stripe-delivered payment.
+
+The scanner check caught jsdom 30's transitive CommonJS-to-ESM dependency failing in the production Lambda runtime. Pinned jsdom 26.1.0 in both application and standalone scanner dependency locks. Added a check of the actual scanner ZIP with Node's synchronous ESM require support disabled, matching the observed Lambda restriction. The corrected build and packaged parser check pass; hosted re-verification is pending. DNS remains on Vercel and the dedicated Stripe webhook remains disabled.
+
+Netlify still refuses to change the primary domain while certificate provisioning is pending. The certificate requires DNS pointing to Netlify first, so the cutover must handle DNS, certificate issuance, and switching the primary domain to `www` together, followed by immediate redirect/auth checks. Retain the recorded Vercel targets for rollback.
