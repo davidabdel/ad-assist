@@ -1945,67 +1945,66 @@ function Formats({ formats, scan }: { formats: FormatSpec[]; scan: ScanSummary }
           {formats.length} format{formats.length === 1 ? ' that keeps' : 's that keep'} working
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+          {/* "Shape, never words" is the reassurance this screen most needs to
+              give, so it survives the shortened copy. */}
           Read from <span className="tabular-nums">{scan.adsQualified.toLocaleString()}</span> ads
-          that have been live between three months and a year. Run time is the only performance
-          signal Meta publishes for commercial ads — no impressions, no spend — so an ad that has
-          been live a full quarter is live because it pays for itself. Past a year it is usually
-          just always-on, so those are left out.
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-zinc-500">
-          {/* The rule the whole design rests on, said where the operator can see
-              it, because "you are not copying anyone" is the reassurance this
-              screen most needs to give. */}
-          What was kept is the <span className="font-semibold text-zinc-900">shape</span> of these
-          ads, never their words. Nothing an advertiser wrote travels past this screen.
+          that have been live between three months and a year. What was kept is the{' '}
+          <span className="font-semibold text-zinc-900">shape</span> of these ads, never their
+          words.
         </p>
 
-        {byMedia.map((group) => (
-          <div key={group.media} className="mt-6">
-            <h3 className={MICRO}>{group.media === 'image' ? 'Statics' : 'Video'}</h3>
-            <ul className="mt-3 grid gap-3 md:grid-cols-2">
-              {group.items.map((f) => (
-                <li key={f.id} className="rounded-[14px] border border-zinc-200 bg-white p-4">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                    <p className="text-[15px] font-bold text-zinc-900">{f.format_name}</p>
-                    <p className="text-xs text-zinc-500 tabular-nums">
-                      seen in {f.observed_count} ad{f.observed_count === 1 ? '' : 's'}
-                      {f.median_days_running != null
-                        ? ` · running ${f.median_days_running} days on average` : ''}
-                    </p>
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-zinc-600">{f.description}</p>
-
-                  <dl className="mt-3 space-y-2 text-sm">
-                    <div>
-                      <dt className={MICRO}>How it opens</dt>
-                      <dd className="mt-0.5 text-zinc-600">{f.hook_pattern}</dd>
+        <details className="group mt-4">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-500 hover:text-zinc-900">
+            See the {formats.length} formats
+          </summary>
+          {byMedia.map((group) => (
+            <div key={group.media} className="mt-4">
+              <h3 className={MICRO}>{group.media === 'image' ? 'Statics' : 'Video'}</h3>
+              <ul className="mt-3 grid gap-3 md:grid-cols-2">
+                {group.items.map((f) => (
+                  <li key={f.id} className="rounded-[14px] border border-zinc-200 bg-white p-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <p className="text-[15px] font-bold text-zinc-900">{f.format_name}</p>
+                      <p className="text-xs text-zinc-500 tabular-nums">
+                        seen in {f.observed_count} ad{f.observed_count === 1 ? '' : 's'}
+                        {f.median_days_running != null
+                          ? ` · running ${f.median_days_running} days on average` : ''}
+                      </p>
                     </div>
-                    <div>
-                      <dt className={MICRO}>What is on screen</dt>
-                      <dd className="mt-0.5 text-zinc-600">{f.visual_recipe}</dd>
-                    </div>
-                    {f.offer_placement ? (
+                    <p className="mt-2 text-sm leading-relaxed text-zinc-600">{f.description}</p>
+  
+                    <dl className="mt-3 space-y-2 text-sm">
                       <div>
-                        <dt className={MICRO}>Where the offer sits</dt>
-                        <dd className="mt-0.5 text-zinc-600">{f.offer_placement}</dd>
+                        <dt className={MICRO}>How it opens</dt>
+                        <dd className="mt-0.5 text-zinc-600">{f.hook_pattern}</dd>
                       </div>
+                      <div>
+                        <dt className={MICRO}>What is on screen</dt>
+                        <dd className="mt-0.5 text-zinc-600">{f.visual_recipe}</dd>
+                      </div>
+                      {f.offer_placement ? (
+                        <div>
+                          <dt className={MICRO}>Where the offer sits</dt>
+                          <dd className="mt-0.5 text-zinc-600">{f.offer_placement}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+  
+                    {group.media === 'video' ? (
+                      // Stated rather than left as an absence. A blank field reads
+                      // as an oversight; a sentence saying what is missing and why
+                      // reads as a limit, which is what it is.
+                      <p className="mt-3 text-xs text-zinc-400">
+                        Pacing — cut count, shot length, where the hook ends — is not here. Those are
+                        measurements taken from the video file, and nothing downloads the videos yet.
+                      </p>
                     ) : null}
-                  </dl>
-
-                  {group.media === 'video' ? (
-                    // Stated rather than left as an absence. A blank field reads
-                    // as an oversight; a sentence saying what is missing and why
-                    // reads as a limit, which is what it is.
-                    <p className="mt-3 text-xs text-zinc-400">
-                      Pacing — cut count, shot length, where the hook ends — is not here. Those are
-                      measurements taken from the video file, and nothing downloads the videos yet.
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </details>
       </Card>
     </div>
   );
