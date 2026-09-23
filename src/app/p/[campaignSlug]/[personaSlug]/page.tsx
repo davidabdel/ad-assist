@@ -43,7 +43,9 @@ export default async function PersonaPage({ params }: Props) {
   return (
     <>
       <ViewPing personaId={page.persona_id} />
-      <Listicle page={page} />
+      {/* The slug, not the id: it travels into the seller's checkout as ?src=
+          and someone has to read it in a Stripe dashboard six weeks from now. */}
+      <Listicle page={page} personaSlug={personaSlug} />
     </>
   );
 }

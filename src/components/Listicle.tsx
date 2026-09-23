@@ -1,6 +1,7 @@
 import type { PublicPage } from '@/lib/page-data';
 import { NEUTRAL_BRAND, brandVars, googleFontsHref } from '@/lib/brand';
 import { spec } from '@/lib/product-type';
+import { ctaHrefFor } from '@/lib/cta-url';
 import { CtaLink } from './CtaLink';
 import { EnquiryForm } from './EnquiryForm';
 
@@ -52,10 +53,16 @@ function Slot({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-export function Listicle({ page, preview = false }: { page: PublicPage; preview?: boolean }) {
+export function Listicle({
+  page, preview = false, personaSlug = null,
+}: { page: PublicPage; preview?: boolean; personaSlug?: string | null }) {
   const personaId = page.persona_id;
   const brand = page.brand ?? NEUTRAL_BRAND;
   const fonts = googleFontsHref(brand);
+  // The same checkout URL for all twenty pages, each one saying which page sent
+  // the buyer. See lib/cta-url.ts — on the base page and the preview there is
+  // no persona, and the URL goes out exactly as it was stored.
+  const ctaHref = ctaHrefFor(page.cta_url, personaSlug);
   // A vehicle has no cart: there is one of it and the buyer rings. So the same
   // offer block ends in a phone number and a form instead of a checkout link,
   // and the sticky bar becomes tap-to-call. Everything else on the page — the
@@ -241,7 +248,7 @@ export function Listicle({ page, preview = false }: { page: PublicPage; preview?
               and a button that reads "Call about this one" with no digits
               anywhere is a dead end on the device half of them are using. */}
           <CtaLink
-            href={page.cta_url}
+            href={ctaHref}
             personaId={personaId}
             className="mt-7 inline-block w-full rounded-[var(--brand-radius)] px-8 py-4 text-base font-semibold transition hover:opacity-90 sm:w-auto"
             style={{ background: 'var(--brand-accent)', color: 'var(--brand-on-accent)' }}
@@ -271,7 +278,7 @@ export function Listicle({ page, preview = false }: { page: PublicPage; preview?
         }}
       >
         <CtaLink
-          href={page.cta_url}
+          href={ctaHref}
           personaId={personaId}
           className="mx-auto block max-w-md rounded-[var(--brand-radius)] px-6 py-3.5 text-center text-base font-semibold transition hover:opacity-90"
           style={{ background: 'var(--brand-accent)', color: 'var(--brand-on-accent)' }}
