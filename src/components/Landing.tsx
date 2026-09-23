@@ -344,6 +344,7 @@ export function Landing() {
           <div className="text-[13px] text-zinc-400">Different customer. Different ad. Better path to cart.</div>
           <div className="flex gap-[22px] text-[13px] font-semibold text-zinc-500">
             <a href="#how" className="hover:text-zinc-900">How it works</a>
+            <Link href="/privacy" className="hover:text-zinc-900">Privacy</Link>
             <Link href="/login" className="hover:text-zinc-900">Log in</Link>
           </div>
         </div>
