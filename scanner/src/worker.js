@@ -82,6 +82,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TICK_URL = process.env.TICK_URL;
 const TICK_EVERY_MS = Number(process.env.TICK_EVERY_MS || 10_000);
 /**
+ * How often to poke when the last poke moved nothing. Nothing running is the
+ * normal state of this app most of the day, and polling it at full speed
+ * around the clock was most of the Supabase egress bill (2026-10-31). A tab
+ * open on a campaign drives it by itself, and a scan the Mac claims is picked
+ * up by the 5-second job loop, not by this, so the slow rate only delays a
+ * campaign nobody is watching by up to a minute.
+ */
+const TICK_IDLE_MS = Number(process.env.TICK_IDLE_MS || 60_000);
+let tickIdle = false;
+/**
  * The service role key, which this worker already holds — so switching the
  * driver on took no new secret at either end. The route accepts CRON_SECRET
  * too, for the day Vercel's scheduler does the poking instead.
@@ -102,7 +112,7 @@ let tickWarned = false;
  * as well, so an overlap is safe rather than merely unlikely.
  */
 function pokeTick() {
-  if (ticking || Date.now() - tickedAt < TICK_EVERY_MS) return;
+  if (ticking || Date.now() - tickedAt < (tickIdle ? TICK_IDLE_MS : TICK_EVERY_MS)) return;
   if (!TICK_URL || !TICK_SECRET) {
     if (!tickWarned) {
       tickWarned = true;
@@ -126,6 +136,10 @@ function pokeTick() {
       // Printed because this window is the only place the run is visible once
       // the phone is in a pocket. Silence when nothing moved, so an idle
       // machine does not scroll all night.
+      // Back to full speed the moment anything moves, including a campaign
+      // only `waiting` on the Mac — that one needs noticing promptly when its
+      // scan lands.
+      tickIdle = !(body?.driven ?? []).length;
       for (const c of body?.driven ?? []) {
         console.log(`  ${c.title}: ${c.last}`);
       }

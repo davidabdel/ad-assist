@@ -111,8 +111,15 @@ async function tick(only?: string): Promise<Response> {
   const db = serviceClient();
   const startedAt = Date.now();
 
+  // Only what this loop reads. NOT `*`: a campaign row carries the whole scraped
+  // product (reviews, copy, images) at 10-20 KB a row, and the Mac pokes this
+  // every few seconds around the clock. Reading four finished campaigns in full
+  // on every poke was ~540 MB a day of Supabase egress to learn their status —
+  // it put the project over the free plan's 5.5 GB on 2026-10-31. `advance()`
+  // re-reads the full row itself, under its lock, so nothing downstream needs
+  // more than this.
   let query = db.from('campaigns')
-    .select('*').in('status', DRIVABLE);
+    .select('id, title, status, updated_at').in('status', DRIVABLE);
   // One campaign rather than everything with somewhere to go. Nothing needs
   // this in normal running — the poker has no idea which campaigns exist — but
   // a check that drove every drivable row would drive the real ones, with real
@@ -177,7 +184,9 @@ async function tick(only?: string): Promise<Response> {
     for (;;) {
       let result;
       try {
-        result = await advance(campaign);
+        // Only id and status are read before advance() fetches the full row
+        // under its lock — see the select above.
+        result = await advance(campaign as unknown as Parameters<typeof advance>[0]);
       } catch (e) {
         // A thrown unit is not a failed campaign — `advance()` records the ones
         // that are. This is the network, the model timing out, a deploy landing
