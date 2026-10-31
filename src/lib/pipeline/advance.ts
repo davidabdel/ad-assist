@@ -289,7 +289,16 @@ export async function advance(campaign: CampaignRow): Promise<AdvanceResult> {
     // of date, and acting on a stale status is how a stage runs twice.
     const { data: fresh } = await db.from('campaigns')
       .select('*').eq('id', campaign.id).maybeSingle();
-    return await unit((fresh as CampaignRow | null) ?? campaign, db);
+    // Gone between the listing and the lock. Not falling back to the row this
+    // was called with: the tick lists campaigns with only the few columns it
+    // needs, so that object is not a whole campaign and no stage may run on it.
+    if (!fresh) {
+      return {
+        status: campaign.status, done: false, waiting: false, terminal: true,
+        did: 'This campaign no longer exists.',
+      };
+    }
+    return await unit(fresh as CampaignRow, db);
   } finally {
     // Every path inside returns, including the fail() ones. Releasing here
     // rather than at each return is what keeps the next call from waiting out
